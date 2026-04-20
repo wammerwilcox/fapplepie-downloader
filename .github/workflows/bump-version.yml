@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
   pull-requests: read
 
 jobs:
@@ -15,12 +15,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Determine update type and bump VERSION
+        id: bump
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           commit_msg="${HEAD_COMMIT_MESSAGE}"
@@ -51,12 +49,23 @@ jobs:
           fi
 
           echo "$new_version" > VERSION
+          echo "new_version=${new_version}" >> "${GITHUB_OUTPUT}"
           echo "Bumped VERSION: $current -> $new_version"
 
-      - name: Commit and push
+      - name: Create version bump PR
+        env:
+          BRANCH_NAME: chore/bump-version-after-deps-${{ github.run_id }}
+          GH_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
+          NEW_VERSION: ${{ steps.bump.outputs.new_version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${BRANCH_NAME}"
           git add VERSION
-          git commit -m "chore: bump VERSION after dependency update [skip ci]"
-          git push
+          git commit -m "chore: bump VERSION to ${NEW_VERSION} after dependency update"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${BRANCH_NAME}"
+          gh pr create \
+            --title "chore: bump VERSION to ${NEW_VERSION} after dependency update" \
+            --body "Bumps VERSION after a dependency update was merged into main." \
+            --base main \
+            --head "${BRANCH_NAME}"
