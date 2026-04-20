@@ -1,0 +1,222 @@
+name: Docker Publish
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      test_tag:
+        description: Test image tag to publish without updating latest
+        required: true
+        default: native-multiarch-test
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/wammerwilcox/fapplepie-downloader
+
+jobs:
+  image-inputs:
+    name: Check Image Inputs
+    runs-on: ubuntu-24.04
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
+    outputs:
+      should_publish: ${{ steps.image_inputs.outputs.should_publish }}
+      version: ${{ steps.version.outputs.version }}
+      version_tag: ${{ steps.version.outputs.tag }}
+      image_tag: ${{ steps.tags.outputs.image_tag }}
+      publish_latest: ${{ steps.tags.outputs.publish_latest }}
+      create_version_tag: ${{ steps.tags.outputs.create_version_tag }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Read version
+        id: version
+        run: |
+          VERSION="$(cat VERSION)"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "tag=v${VERSION}" >> "${GITHUB_OUTPUT}"
+
+      - name: Check image inputs
+        id: image_inputs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            echo "should_publish=true" >> "${GITHUB_OUTPUT}"
+            echo "Manual test run requested; publishing test Docker image."
+            exit 0
+          elif git rev-parse "${HEAD_SHA}^" >/dev/null 2>&1; then
+            CHANGED_FILES="$(git diff --name-only "${HEAD_SHA}^" "${HEAD_SHA}")"
+          else
+            CHANGED_FILES="$(git show --name-only --format= "${HEAD_SHA}")"
+          fi
+
+          SHOULD_PUBLISH=false
+          while IFS= read -r path; do
+            case "${path}" in
+              Dockerfile|VERSION|.dockerignore|app/*|.github/workflows/docker-publish.yml)
+                SHOULD_PUBLISH=true
+                ;;
+            esac
+          done <<< "${CHANGED_FILES}"
+
+          echo "should_publish=${SHOULD_PUBLISH}" >> "${GITHUB_OUTPUT}"
+          if [ "${SHOULD_PUBLISH}" = "true" ]; then
+            echo "Image inputs changed; publishing Docker image."
+          else
+            echo "No image inputs changed; skipping Docker image publish."
+          fi
+
+      - name: Choose image tags
+        id: tags
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TEST_TAG: ${{ inputs.test_tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            {
+              echo "image_tag=${TEST_TAG}"
+              echo "publish_latest=false"
+              echo "create_version_tag=false"
+            } >> "${GITHUB_OUTPUT}"
+          else
+            {
+              echo "image_tag=${VERSION}"
+              echo "publish_latest=true"
+              echo "create_version_tag=true"
+            } >> "${GITHUB_OUTPUT}"
+          fi
+
+  build:
+    name: Build ${{ matrix.arch }} Image
+    needs: image-inputs
+    if: needs.image-inputs.outputs.should_publish == 'true'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.arch }} image
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: ${{ matrix.platform }}
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ needs.image-inputs.outputs.image_tag }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+  publish:
+    name: Publish Multi-Arch Manifest
+    needs:
+      - image-inputs
+      - build
+    if: needs.image-inputs.outputs.should_publish == 'true'
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch image tags
+        env:
+          IMAGE_TAG: ${{ needs.image-inputs.outputs.image_tag }}
+          PUBLISH_LATEST: ${{ needs.image-inputs.outputs.publish_latest }}
+        run: |
+          tags=(--tag "${IMAGE_NAME}:${IMAGE_TAG}")
+          if [ "${PUBLISH_LATEST}" = "true" ]; then
+            tags+=(--tag "${IMAGE_NAME}:latest")
+          fi
+
+          docker buildx imagetools create \
+            "${tags[@]}" \
+            "${IMAGE_NAME}:${IMAGE_TAG}-amd64" \
+            "${IMAGE_NAME}:${IMAGE_TAG}-arm64"
+
+      - name: Create version tag
+        env:
+          CREATE_VERSION_TAG: ${{ needs.image-inputs.outputs.create_version_tag }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          VERSION_TAG: ${{ needs.image-inputs.outputs.version_tag }}
+        run: |
+          if [ "${CREATE_VERSION_TAG}" != "true" ]; then
+            echo "Manual test run; no Git version tag needed."
+            exit 0
+          fi
+
+          if git rev-parse "${HEAD_SHA}^" >/dev/null 2>&1; then
+            VERSION_CHANGED="$(git diff --name-only "${HEAD_SHA}^" "${HEAD_SHA}" -- VERSION)"
+          else
+            VERSION_CHANGED="$(git show --name-only --format= "${HEAD_SHA}" -- VERSION)"
+          fi
+
+          if [ -z "${VERSION_CHANGED}" ]; then
+            echo "VERSION file unchanged, no tag needed."
+            exit 0
+          fi
+
+          if git rev-parse -q --verify "refs/tags/${VERSION_TAG}" >/dev/null; then
+            echo "Git tag ${VERSION_TAG} already exists, skipping."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${VERSION_TAG}" "${HEAD_SHA}" -m "Release ${VERSION_TAG} - Automated version bump"
+          git push origin "${VERSION_TAG}"

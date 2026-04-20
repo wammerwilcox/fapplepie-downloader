@@ -1,0 +1,61 @@
+services:
+  fapplepie-downloader:
+    # Use the versioned release image from GitHub Container Registry.
+    image: ghcr.io/wammerwilcox/fapplepie-downloader:1.0.0
+    # To build locally instead, use docker-compose.dev.yml.
+
+    container_name: fapplepie-downloader
+
+    # Mount volumes for persistent storage
+    volumes:
+      - ./app/downloads:/app/downloads
+      - ./app/logs:/app/logs
+      - ./app/cache:/app/cache
+
+    # Environment variables
+    environment:
+      # Cron schedule (default: 2 AM daily)
+      # Format: minute hour day month weekday
+      # Examples:
+      #   0 2 * * *     - Daily at 2 AM
+      #   0 */6 * * *   - Every 6 hours
+      #   0 */12 * * *  - Every 12 hours
+      CRON_SCHEDULE: "0 2 * * *"
+
+      # Directories
+      DOWNLOAD_DIR: /app/downloads
+      LOG_DIR: /app/logs
+
+      # Optional outbound proxy for scraper + downloader traffic.
+      # Leave values empty to use direct network routing.
+      # Example:
+      #   NORDVPN_PROXY=socks5h://nl.socks.nordhold.net:1080
+      #   NORDVPN_USER=<service username>
+      #   NORDVPN_PASS=<service password>
+      NORDVPN_PROXY: "${NORDVPN_PROXY:-}"
+      NORDVPN_USER: "${NORDVPN_USER:-}"
+      NORDVPN_PASS: "${NORDVPN_PASS:-}"
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+        reservations:
+          cpus: "1"
+          memory: 512M
+
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Keep container running
+    stdin_open: true
+    tty: true

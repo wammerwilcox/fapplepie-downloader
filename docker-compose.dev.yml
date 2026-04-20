@@ -1,0 +1,64 @@
+# Docker Compose for Local Development
+# Use this for building and testing locally without registry
+services:
+  fapplepie-downloader:
+    # Build locally from source
+    build:
+      context: .
+      dockerfile: Dockerfile
+    
+    container_name: fapplepie-downloader-dev
+
+    # Mount volumes for persistent storage
+    volumes:
+      - ./app/downloads:/app/downloads
+      - ./app/logs:/app/logs
+      - ./app/cache:/app/cache
+      # Mount source code for live development (optional)
+      # - ./app/scraper.py:/app/scraper.py:ro
+
+    # Environment variables
+    environment:
+      # Cron schedule (default: 2 AM daily)
+      CRON_SCHEDULE: "0 2 * * *"
+      
+      # Directories
+      DOWNLOAD_DIR: /app/downloads
+      LOG_DIR: /app/logs
+
+      # Optional outbound proxy for scraper + downloader traffic.
+      # Leave values empty to use direct network routing.
+      # Example:
+      #   NORDVPN_PROXY=socks5h://nl.socks.nordhold.net:1080
+      #   NORDVPN_USER=<service username>
+      #   NORDVPN_PASS=<service password>
+      NORDVPN_PROXY: "${NORDVPN_PROXY:-}"
+      NORDVPN_USER: "${NORDVPN_USER:-}"
+      NORDVPN_PASS: "${NORDVPN_PASS:-}"
+      
+      # Development mode (optional)
+      PYTHONUNBUFFERED: "1"
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+        reservations:
+          cpus: "1"
+          memory: 512M
+
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Keep container running
+    stdin_open: true
+    tty: true

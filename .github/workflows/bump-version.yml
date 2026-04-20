@@ -1,0 +1,62 @@
+name: Bump VERSION on Renovate merge
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  bump-version:
+    if: contains(github.event.head_commit.message, 'chore(deps):') || contains(github.event.head_commit.message, 'renovate')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine update type and bump VERSION
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          commit_msg="${HEAD_COMMIT_MESSAGE}"
+          echo "Commit message: $commit_msg"
+
+          # Default to patch
+          update_type="patch"
+
+          # Check for major indicators
+          if echo "$commit_msg" | grep -qiE "(major|breaking|!)"; then
+            update_type="major"
+          # Check for minor indicators
+          elif echo "$commit_msg" | grep -qiE "(feat|minor|update.*\\.[^0-9]*[0-9]+\\.0\\.0)"; then
+            update_type="minor"
+          fi
+
+          echo "Detected update type: $update_type"
+
+          current=$(cat VERSION)
+          IFS=. read -r major minor patch <<< "$current"
+
+          if [[ "$update_type" == "major" ]]; then
+            new_version="$((major + 1)).0.0"
+          elif [[ "$update_type" == "minor" ]]; then
+            new_version="$major.$((minor + 1)).0"
+          else
+            new_version="$major.$minor.$((patch + 1))"
+          fi
+
+          echo "$new_version" > VERSION
+          echo "Bumped VERSION: $current -> $new_version"
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add VERSION
+          git commit -m "chore: bump VERSION after dependency update [skip ci]"
+          git push

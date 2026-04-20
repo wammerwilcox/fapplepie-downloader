@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.14"
+
+      - name: Install Python dependencies
+        run: |
+          python -m venv /tmp/ci-venv
+          /tmp/ci-venv/bin/pip install --require-hashes -r app/requirements.txt
+
+      - name: Compile scraper
+        run: /tmp/ci-venv/bin/python -m py_compile app/scraper.py
+
+      - name: Run unit tests
+        run: /tmp/ci-venv/bin/python -m unittest test_scraper.py
+
+      - name: Check installed packages
+        run: /tmp/ci-venv/bin/python -m pip check
+
+      - name: Validate Docker Compose config
+        run: docker compose config
+
+      - name: Build Docker image
+        run: docker build -t fapplepie-downloader-public-test .

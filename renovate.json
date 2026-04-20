@@ -1,0 +1,111 @@
+{
+  "extends": ["config:recommended"],
+  "dependencyDashboard": true,
+  "dependencyDashboardTitle": "FapplePie Renovate Dashboard",
+  "assignees": ["wammerwilcox"],
+  "labels": ["renovate"],
+  "configMigration": true,
+  "prConcurrentLimit": 5,
+  "timezone": "Europe/London",
+  "schedule": ["* 9-17 * * *"],
+  "platformAutomerge": true,
+  "rebaseWhen": "behind-base-branch",
+  "semanticCommits": "enabled",
+  "vulnerabilityAlerts": {
+    "enabled": true
+  },
+  "hostRules": [
+    {
+      "matchHost": "docker.io",
+      "hostType": "docker",
+      "concurrentRequestLimit": 2
+    },
+    {
+      "matchHost": "ghcr.io",
+      "hostType": "docker",
+      "token": "{{env.RENOVATE_GITHUB_COM_TOKEN}}",
+      "concurrentRequestLimit": 2
+    }
+  ],
+  "commitMessagePrefix": "chore(deps):",
+  "commitMessageAction": "update",
+  "commitMessageTopic": "{{depName}}",
+  "commitMessageExtra": "to {{#if isPinDigest}}{{{newDigestShort}}}{{else}}{{#if isMajor}}{{prettyNewMajor}}{{else}}{{#if isSingleVersion}}{{prettyNewVersion}}{{else}}{{#if newValue}}{{{newValue}}}{{else}}{{{newDigestShort}}}{{/if}}{{/if}}{{/if}}{{/if}}",
+  "packageRules": [
+    {
+      "matchCategories": ["docker"],
+      "matchManagers": ["docker", "docker-compose"],
+      "pinDigests": true
+    },
+    {
+      "description": "Delay all major updates for 4 days",
+      "matchUpdateTypes": ["major"],
+      "minimumReleaseAge": "4 days",
+      "automerge": false
+    },
+    {
+      "description": "Require approval for major docker updates",
+      "matchCategories": ["docker"],
+      "matchManagers": ["docker", "docker-compose"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    },
+    {
+      "description": "Auto-merge minor and patch Python dependency updates",
+      "matchManagers": ["pip-compile"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "minimumReleaseAge": "7 days",
+      "automerge": true,
+      "automergeType": "pr"
+    },
+    {
+      "description": "Auto-merge minor and patch updates for pinned container definitions",
+      "groupName": "non-major container dependencies",
+      "matchManagers": ["dockerfile", "docker-compose", "github-actions"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "minimumReleaseAge": "2 days",
+      "automerge": true,
+      "automergeType": "pr"
+    },
+    {
+      "description": "Auto-merge digest-only updates (chore: deps)",
+      "matchUpdateTypes": ["digest"],
+      "matchCategories": ["docker"],
+      "minimumReleaseAge": "0 days",
+      "automerge": true,
+      "automergeType": "pr",
+      "schedule": ["at any time"]
+    },
+    {
+      "description": "Auto-merge GitHub Actions digest pins",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["digest", "pinDigest"],
+      "minimumReleaseAge": "0 days",
+      "automerge": true,
+      "automergeType": "pr",
+      "schedule": ["at any time"]
+    }
+  ],
+  "dockerfile": {
+    "enabled": true,
+    "pinDigests": true
+  },
+  "docker-compose": {
+    "enabled": true,
+    "pinDigests": true,
+    "managerFilePatterns": ["/(^|/)docker-compose\\.ya?ml$/"]
+  },
+  "pip-compile": {
+    "enabled": true,
+    "managerFilePatterns": ["/(^|/)app/requirements\\.txt$/"]
+  },
+
+  "pip_requirements": {
+    "enabled": false
+  },
+
+  "github-actions": {
+    "enabled": true,
+    "pinDigests": true
+  }
+}

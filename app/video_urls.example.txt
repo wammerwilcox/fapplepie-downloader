@@ -1,0 +1,2 @@
+# Add one resolved video URL per line for download-only runs.
+# This file is a template; copy it to app/video_urls.txt for local runtime use.
