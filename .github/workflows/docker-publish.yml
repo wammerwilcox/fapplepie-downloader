@@ -189,10 +189,12 @@ jobs:
             "${IMAGE_NAME}:${IMAGE_TAG}-amd64" \
             "${IMAGE_NAME}:${IMAGE_TAG}-arm64"
 
-      - name: Create version tag
+      - name: Create version tag and release
         env:
           CREATE_VERSION_TAG: ${{ needs.image-inputs.outputs.create_version_tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          VERSION: ${{ needs.image-inputs.outputs.version }}
           VERSION_TAG: ${{ needs.image-inputs.outputs.version_tag }}
         run: |
           if [ "${CREATE_VERSION_TAG}" != "true" ]; then
@@ -213,10 +215,37 @@ jobs:
 
           if git rev-parse -q --verify "refs/tags/${VERSION_TAG}" >/dev/null; then
             echo "Git tag ${VERSION_TAG} already exists, skipping."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "${VERSION_TAG}" "${HEAD_SHA}" -m "Release ${VERSION_TAG} - Automated version bump"
+            git push origin "${VERSION_TAG}"
+          fi
+
+          if gh release view "${VERSION_TAG}" >/dev/null 2>&1; then
+            echo "GitHub release ${VERSION_TAG} already exists, skipping."
             exit 0
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${VERSION_TAG}" "${HEAD_SHA}" -m "Release ${VERSION_TAG} - Automated version bump"
-          git push origin "${VERSION_TAG}"
+          COMMIT_SUBJECT="$(git log -1 --format=%s "${HEAD_SHA}")"
+          if echo "${COMMIT_SUBJECT}" | grep -qiE '^chore: bump VERSION to .+ after dependency update'; then
+            NOTES_FILE="$(mktemp)"
+            cat > "${NOTES_FILE}" <<EOF
+          Automated dependency maintenance release.
+
+          VERSION was bumped to ${VERSION} after dependency updates were merged.
+
+          Container images:
+          - ${IMAGE_NAME}:${VERSION}
+          - ${IMAGE_NAME}:latest
+          EOF
+            gh release create "${VERSION_TAG}" \
+              --title "${VERSION_TAG}" \
+              --target "${HEAD_SHA}" \
+              --notes-file "${NOTES_FILE}"
+          else
+            gh release create "${VERSION_TAG}" \
+              --title "${VERSION_TAG}" \
+              --target "${HEAD_SHA}" \
+              --generate-notes
+          fi
