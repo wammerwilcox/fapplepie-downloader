@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 import requests
+try:
+    from curl_cffi import requests as curl_requests
+except ImportError:  # pragma: no cover - exercised only when optional dependency is absent.
+    curl_requests = None
 from bs4 import BeautifulSoup
 import sys
 import subprocess
@@ -40,6 +44,10 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
+CURL_REQUEST_EXCEPTIONS = (
+    (curl_requests.exceptions.RequestException,) if curl_requests is not None else ()
+)
+SCRAPE_REQUEST_EXCEPTIONS = (requests.RequestException, *CURL_REQUEST_EXCEPTIONS)
 
 SCRAPE_TRANSPORT_CONFIGURED = "configured"
 SCRAPE_TRANSPORT_DIRECT = "direct"
@@ -47,7 +55,7 @@ DEFAULT_SCRAPE_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/133.0.0.0 Safari/537.36"
+        "Chrome/137.0.0.0 Safari/537.36"
     ),
     "Accept": (
         "text/html,application/xhtml+xml,application/xml;q=0.9,"
@@ -212,9 +220,25 @@ def _scrape_direct_fallback_enabled() -> bool:
 
 
 def _build_scrape_session() -> requests.Session:
-    session = requests.Session()
+    if curl_requests is not None:
+        session = curl_requests.Session()
+        session.codex_supports_impersonate = True
+    else:
+        logger.warning(
+            "curl_cffi is unavailable; falling back to standard requests for scraping."
+        )
+        session = requests.Session()
     session.headers.update(DEFAULT_SCRAPE_HEADERS)
     return session
+
+
+def _request_impersonation_kwargs(session, url: str) -> dict:
+    if (
+        getattr(session, "codex_supports_impersonate", False)
+        and _is_fapplepie_host(urlparse(url).hostname)
+    ):
+        return {"impersonate": "chrome"}
+    return {}
 
 
 def _transport_proxies_for_request(
@@ -397,11 +421,12 @@ def _request_with_retries(
                 timeout=timeout,
                 allow_redirects=allow_redirects,
                 proxies=request_proxies,
+                **_request_impersonation_kwargs(session, url),
             )
             response.codex_transport_mode = transport_mode
             response.codex_proxied = proxied
             return response
-        except requests.RequestException as exc:
+        except SCRAPE_REQUEST_EXCEPTIONS as exc:
             last_error = exc
             if attempt < max_attempts:
                 sleep_seconds = backoff_seconds * attempt
@@ -446,7 +471,7 @@ def _request_for_scrape(
     initial_proxied = False
     fallback_allowed = _scrape_direct_fallback_enabled()
     proxy_failed = False
-    proxy_error: requests.RequestException | None = None
+    proxy_error: BaseException | None = None
 
     try:
         response = _request_with_retries(
@@ -459,7 +484,7 @@ def _request_for_scrape(
             transport_mode=initial_transport_mode,
         )
         initial_proxied = getattr(response, "codex_proxied", False)
-    except requests.RequestException as exc:
+    except SCRAPE_REQUEST_EXCEPTIONS as exc:
         proxy_failed = True
         proxy_error = exc
         if not (
@@ -598,7 +623,7 @@ def _resolve_working_base_url(
                     base_url,
                 )
             return candidate, response
-        except requests.RequestException as exc:
+        except SCRAPE_REQUEST_EXCEPTIONS as exc:
             failures.append(f"{candidate} -> {exc}")
             logger.warning("Base URL probe failed: %s", exc)
 
@@ -794,7 +819,7 @@ def scrape_videos(base_url, output_file):
                             transport_state=transport_state,
                         )
                     response.raise_for_status()
-                except requests.RequestException as e:
+                except SCRAPE_REQUEST_EXCEPTIONS as e:
                     print(f"Could not fetch page {page}: {e}")
                     if page == 1:
                         print("Page 1 could not be fetched after retries. Exiting with error.")
@@ -903,7 +928,7 @@ def scrape_videos(base_url, output_file):
         print(f"Cache saved to: {CACHE_PATH}")
         print(f"{'='*60}")
         
-    except requests.RequestException as e:
+    except SCRAPE_REQUEST_EXCEPTIONS as e:
         print(f"Error fetching the page: {e}", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
