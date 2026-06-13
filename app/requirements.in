@@ -1,4 +1,5 @@
 requests==2.34.2
+curl_cffi==0.14.0
 PySocks==1.7.1
 beautifulsoup4==4.14.3
 yt-dlp==2026.3.17
