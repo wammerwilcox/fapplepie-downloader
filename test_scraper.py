@@ -125,6 +125,28 @@ class ScraperTransportTests(unittest.TestCase):
         self.assertEqual(session.get.call_count, 2)
         sleep_mock.assert_called_once_with(0.5)
 
+    @unittest.skipIf(scraper.curl_requests is None, "curl_cffi is not installed")
+    def test_request_retries_curl_cffi_failures(self) -> None:
+        session = Mock()
+        session.codex_supports_impersonate = True
+        session.get.side_effect = [
+            scraper.curl_requests.exceptions.ConnectionError("boom"),
+            make_response(200, "https://fapplepie.com/videos"),
+        ]
+
+        with patch.object(scraper, "_proxy_url_for_target", return_value=None):
+            with patch.object(scraper.time, "sleep") as sleep_mock:
+                response = scraper._request_with_retries(
+                    session,
+                    "https://fapplepie.com/videos",
+                    max_attempts=2,
+                    backoff_seconds=0.5,
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(session.get.call_count, 2)
+        sleep_mock.assert_called_once_with(0.5)
+
     def test_scrape_session_has_browser_headers(self) -> None:
         session = scraper._build_scrape_session()
 
@@ -133,6 +155,34 @@ class ScraperTransportTests(unittest.TestCase):
         self.assertIn("Accept-Language", session.headers)
         self.assertIn("Referer", session.headers)
         self.assertIn("Upgrade-Insecure-Requests", session.headers)
+        self.assertIn("Chrome/137.0.0.0", session.headers["User-Agent"])
+
+    def test_curl_cffi_scrape_session_uses_chrome_impersonation_for_fapplepie(self) -> None:
+        session = Mock()
+        session.get.return_value = make_response(200, "https://fapplepie.com/videos")
+        session.codex_supports_impersonate = True
+
+        with patch.object(scraper, "_proxy_url_for_target", return_value=None):
+            scraper._request_with_retries(
+                session,
+                "https://fapplepie.com/videos",
+                max_attempts=1,
+            )
+
+        self.assertEqual(session.get.call_args.kwargs["impersonate"], "chrome")
+
+    def test_impersonation_is_not_sent_to_standard_requests_sessions(self) -> None:
+        session = Mock()
+        session.get.return_value = make_response(200, "https://example.com/")
+
+        with patch.object(scraper, "_proxy_url_for_target", return_value=None):
+            scraper._request_with_retries(
+                session,
+                "https://example.com/",
+                max_attempts=1,
+            )
+
+        self.assertNotIn("impersonate", session.get.call_args.kwargs)
 
     def test_stale_resolved_url_detection_flags_fapplepie_targets(self) -> None:
         self.assertTrue(
