@@ -1,7 +1,7 @@
 services:
   fapplepie-downloader:
     # Use the versioned release image from GitHub Container Registry.
-    image: ghcr.io/wammerwilcox/fapplepie-downloader:1.0.0@sha256:0826f4e05f0c0883ac8df166d9c1c222a35608533b93aaf4428d37c6792a969b
+    image: ghcr.io/wammerwilcox/fapplepie-downloader:1.1.0@sha256:3a30d57fb1b9916e8c68159414965ee0af4832424a283c45a4ed2620e00c3fd2
     # To build locally instead, use docker-compose.dev.yml.
 
     container_name: fapplepie-downloader
