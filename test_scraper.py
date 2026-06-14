@@ -84,6 +84,43 @@ class ScraperTransportTests(unittest.TestCase):
         self.assertEqual(links, ["https://www.fapplepie.com/watch/abc"])
         self.assertFalse(has_next_page)
 
+    def test_probe_scraper_resolves_one_sample_without_cache_or_output_writes(self) -> None:
+        first_page = make_response(200, "https://www.fapplepie.com/videos")
+        first_page._content = (
+            b'<h3><a href="/watch/abc">One</a></h3><a>next \xe2\x80\xba</a>'
+        )
+        redirect = make_response(200, "https://www.eporner.com/video-abc/example/")
+        session = Mock()
+        session.headers = {"User-Agent": "test-agent"}
+
+        with patch.object(
+            scraper,
+            "_build_scrape_session",
+            return_value=nullcontext(session),
+        ):
+            with patch.object(
+                scraper,
+                "_resolve_working_base_url",
+                return_value=("https://www.fapplepie.com/videos", first_page),
+            ):
+                with patch.object(scraper, "_fetch_robots_txt", return_value=None):
+                    with patch.object(scraper, "_request_for_scrape", return_value=redirect):
+                        with patch.object(scraper, "load_cache_locked") as load_cache:
+                            with patch.object(scraper, "save_cache_locked") as save_cache:
+                                result = scraper.probe_scraper(
+                                    "https://fapplepie.com/videos"
+                                )
+
+        self.assertEqual(result.video_count, 1)
+        self.assertTrue(result.has_next_page)
+        self.assertEqual(result.sample_url, "https://www.fapplepie.com/watch/abc")
+        self.assertEqual(
+            result.sample_final_url,
+            "https://www.eporner.com/video-abc/example/",
+        )
+        load_cache.assert_not_called()
+        save_cache.assert_not_called()
+
     def test_scrape_videos_paginates_after_malformed_h3_links(self) -> None:
         first_response = make_response(200, "https://www.fapplepie.com/videos")
         first_response._content = b"<h3><a>Broken</a></h3><a>next \xe2\x80\xba</a>"
