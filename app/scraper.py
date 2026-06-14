@@ -75,6 +75,35 @@ class ScrapeTransportState:
     mode: str = SCRAPE_TRANSPORT_CONFIGURED
 
 
+class ProbeError(Exception):
+    """Probe failure annotated with the scrape phase that failed."""
+
+    def __init__(self, phase: str, message: str):
+        super().__init__(f"{phase}: {message}")
+        self.phase = phase
+
+
+@dataclass
+class ProbeResult:
+    working_base_url: str
+    final_base_url: str
+    video_count: int
+    has_next_page: bool
+    sample_url: str
+    sample_final_url: str
+
+    def format_success(self) -> str:
+        return (
+            "Probe successful: "
+            f"working_base_url={self.working_base_url} "
+            f"final_base_url={self.final_base_url} "
+            f"videos_found={self.video_count} "
+            f"has_next_page={self.has_next_page} "
+            f"sample_url={self.sample_url} "
+            f"sample_final_url={self.sample_final_url}"
+        )
+
+
 def _redact_proxy_url(proxy_url: str) -> str:
     """Hide proxy password in logs while keeping host/port visible."""
     parsed = urlparse(proxy_url)

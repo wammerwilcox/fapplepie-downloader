@@ -20,6 +20,29 @@ def make_response(status_code: int, url: str) -> requests.Response:
 
 
 class ScraperTransportTests(unittest.TestCase):
+    def test_probe_error_includes_phase_and_message(self) -> None:
+        error = scraper.ProbeError("base_url", "no candidates worked")
+
+        self.assertEqual(error.phase, "base_url")
+        self.assertEqual(str(error), "base_url: no candidates worked")
+
+    def test_probe_result_formats_success_summary(self) -> None:
+        result = scraper.ProbeResult(
+            working_base_url="https://fapplepie.com/videos",
+            final_base_url="https://www.fapplepie.com/videos",
+            video_count=2,
+            has_next_page=True,
+            sample_url="https://fapplepie.com/watch/abc",
+            sample_final_url="https://www.eporner.com/video-abc/example/",
+        )
+
+        summary = result.format_success()
+
+        self.assertIn("Probe successful", summary)
+        self.assertIn("videos_found=2", summary)
+        self.assertIn("has_next_page=True", summary)
+        self.assertIn("sample_final_url=https://www.eporner.com/video-abc/example/", summary)
+
     def test_proxied_403_retries_direct_and_pins_transport(self) -> None:
         session = Mock()
         session.get.side_effect = [
