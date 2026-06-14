@@ -1,5 +1,7 @@
+import io
 import sys
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
@@ -81,6 +83,68 @@ class ScraperTransportTests(unittest.TestCase):
 
         self.assertEqual(links, ["https://www.fapplepie.com/watch/abc"])
         self.assertFalse(has_next_page)
+
+    def test_scrape_videos_paginates_after_malformed_h3_links(self) -> None:
+        first_response = make_response(200, "https://www.fapplepie.com/videos")
+        first_response._content = b"<h3><a>Broken</a></h3><a>next \xe2\x80\xba</a>"
+        second_response = make_response(200, "https://www.fapplepie.com/videos?page=2")
+        second_response._content = b'<h3><a href="/watch/abc">One</a></h3>'
+        session = Mock()
+        cache = {
+            "resolved_urls": {
+                "https://www.fapplepie.com/watch/abc": (
+                    "https://www.eporner.com/video-abc/example/"
+                ),
+            },
+            "downloaded_urls": [],
+        }
+
+        with TemporaryDirectory() as tmp_dir:
+            with patch.object(scraper, "BASE_DIR", Path(tmp_dir)):
+                with patch.object(scraper, "load_cache_locked", return_value=cache):
+                    with patch.object(scraper, "save_cache_locked"):
+                        with patch.object(
+                            scraper,
+                            "_build_scrape_session",
+                            return_value=nullcontext(session),
+                        ):
+                            session.headers = {"User-Agent": "test-agent"}
+                            with patch.object(
+                                scraper,
+                                "_resolve_working_base_url",
+                                return_value=(
+                                    "https://www.fapplepie.com/videos",
+                                    first_response,
+                                ),
+                            ):
+                                with patch.object(
+                                    scraper,
+                                    "_fetch_robots_txt",
+                                    return_value=None,
+                                ):
+                                    with patch.object(
+                                        scraper,
+                                        "_request_for_scrape",
+                                        return_value=second_response,
+                                    ) as request_mock:
+                                        with patch.dict(
+                                            "os.environ",
+                                            {"SCRAPE_DELAY_SECONDS": "0"},
+                                            clear=False,
+                                        ):
+                                            with patch(
+                                                "sys.stdout",
+                                                new_callable=io.StringIO,
+                                            ) as stdout:
+                                                scraper.scrape_videos(
+                                                    "https://www.fapplepie.com/videos",
+                                                    "video_urls.txt",
+                                                )
+
+        output = stdout.getvalue()
+        self.assertIn("  Found 0 videos on page 1", output)
+        self.assertIn("Fetching page 2: https://www.fapplepie.com/videos?page=2", output)
+        request_mock.assert_called_once()
 
     def test_proxied_403_retries_direct_and_pins_transport(self) -> None:
         session = Mock()
