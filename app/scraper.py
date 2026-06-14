@@ -685,6 +685,23 @@ def _robots_disallow(
         )
     return not is_allowed
 
+
+def _parse_video_links(response, working_origin: str) -> tuple[list[str], bool]:
+    soup = BeautifulSoup(response.content, 'html.parser')
+    video_urls: list[str] = []
+
+    for h3 in soup.find_all('h3'):
+        link = h3.find('a')
+        if link and link.get('href'):
+            full_url = link['href']
+            if not full_url.startswith('http'):
+                full_url = working_origin + full_url
+            video_urls.append(full_url)
+
+    has_next_page = soup.find('a', string='next ›') is not None
+    return video_urls, has_next_page
+
+
 # Read version from VERSION file
 def get_version():
     """Get version from VERSION file in project root"""
@@ -855,34 +872,21 @@ def scrape_videos(base_url, output_file):
                         sys.exit(2)
                     break
 
-                soup = BeautifulSoup(response.content, 'html.parser')
+                page_video_urls, has_next_page = _parse_video_links(
+                    response,
+                    working_origin,
+                )
 
-                # Find all h3 tags (based on the page structure)
-                h3_tags = soup.find_all('h3')
-
-                if not h3_tags:
+                if not page_video_urls:
                     print(f"No videos found on page {page}. Stopping pagination.")
                     break
 
-                page_video_count = 0
-
-                for h3 in h3_tags:
-                    # Find the link within the h3 tag
-                    link = h3.find('a')
-                    if link and link.get('href'):
-                        full_url = link['href']
-                        # Handle relative URLs
-                        if not full_url.startswith('http'):
-                            full_url = working_origin + full_url
-
-                        all_video_urls.append(full_url)
-                        page_video_count += 1
+                all_video_urls.extend(page_video_urls)
+                page_video_count = len(page_video_urls)
 
                 print(f"  Found {page_video_count} videos on page {page}")
 
-                # Check if there's a next page link
-                next_page_link = soup.find('a', string='next ›')
-                if not next_page_link:
+                if not has_next_page:
                     print(f"No next page link found. Stopping pagination.")
                     break
 
