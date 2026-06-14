@@ -97,14 +97,22 @@ class ScraperTransportTests(unittest.TestCase):
             scraper,
             "_build_scrape_session",
             return_value=nullcontext(session),
-        ):
+        ) as build_session:
             with patch.object(
                 scraper,
                 "_resolve_working_base_url",
                 return_value=("https://www.fapplepie.com/videos", first_page),
-            ):
-                with patch.object(scraper, "_fetch_robots_txt", return_value=None):
-                    with patch.object(scraper, "_request_for_scrape", return_value=redirect):
+            ) as resolve_working_base_url:
+                with patch.object(
+                    scraper,
+                    "_fetch_robots_txt",
+                    return_value=None,
+                ) as fetch_robots_txt:
+                    with patch.object(
+                        scraper,
+                        "_request_for_scrape",
+                        return_value=redirect,
+                    ) as request_for_scrape:
                         with patch.object(scraper, "load_cache_locked") as load_cache:
                             with patch.object(scraper, "save_cache_locked") as save_cache:
                                 result = scraper.probe_scraper(
@@ -118,6 +126,37 @@ class ScraperTransportTests(unittest.TestCase):
             result.sample_final_url,
             "https://www.eporner.com/video-abc/example/",
         )
+        build_session.assert_called_once_with()
+        resolve_working_base_url.assert_called_once()
+        resolve_kwargs = resolve_working_base_url.call_args.kwargs
+        self.assertIs(resolve_kwargs["session"], session)
+        self.assertEqual(resolve_kwargs["base_url"], "https://fapplepie.com/videos")
+        self.assertEqual(resolve_kwargs["timeout"], 10.0)
+        self.assertEqual(resolve_kwargs["max_attempts"], 3)
+        self.assertEqual(resolve_kwargs["backoff_seconds"], 1.0)
+        transport_state = resolve_kwargs["transport_state"]
+        self.assertIsInstance(transport_state, scraper.ScrapeTransportState)
+
+        fetch_robots_txt.assert_called_once()
+        fetch_args = fetch_robots_txt.call_args.args
+        fetch_kwargs = fetch_robots_txt.call_args.kwargs
+        self.assertIs(fetch_args[0], session)
+        self.assertEqual(fetch_args[1], "https://www.fapplepie.com/videos")
+        self.assertEqual(fetch_kwargs["timeout"], 10.0)
+        self.assertEqual(fetch_kwargs["max_attempts"], 3)
+        self.assertEqual(fetch_kwargs["backoff_seconds"], 1.0)
+        self.assertIs(fetch_kwargs["transport_state"], transport_state)
+
+        request_for_scrape.assert_called_once()
+        request_args = request_for_scrape.call_args.args
+        request_kwargs = request_for_scrape.call_args.kwargs
+        self.assertIs(request_args[0], session)
+        self.assertEqual(request_args[1], "https://www.fapplepie.com/watch/abc")
+        self.assertEqual(request_kwargs["timeout"], 10.0)
+        self.assertTrue(request_kwargs["allow_redirects"])
+        self.assertEqual(request_kwargs["max_attempts"], 3)
+        self.assertEqual(request_kwargs["backoff_seconds"], 1.0)
+        self.assertIs(request_kwargs["transport_state"], transport_state)
         load_cache.assert_not_called()
         save_cache.assert_not_called()
 
