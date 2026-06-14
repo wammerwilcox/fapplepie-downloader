@@ -1,7 +1,7 @@
 services:
   fapplepie-downloader:
-    # Use the versioned release image from GitHub Container Registry.
-    image: ghcr.io/wammerwilcox/fapplepie-downloader:1.1.0@sha256:3a30d57fb1b9916e8c68159414965ee0af4832424a283c45a4ed2620e00c3fd2
+    # Use the pinned beta image from GitHub Container Registry.
+    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.2@sha256:18a591b46a314ade9cdb9537473f6c32faadba5ce935ce88001d6d91764f0f11
     # To build locally instead, use docker-compose.dev.yml.
 
     container_name: fapplepie-downloader
@@ -21,6 +21,15 @@ services:
       #   0 */6 * * *   - Every 6 hours
       #   0 */12 * * *  - Every 12 hours
       CRON_SCHEDULE: "0 2 * * *"
+
+      # Polite timing for scheduled scraper runs.
+      # Manual one-shot runs start immediately.
+      SCRAPE_START_DELAY_SECONDS: "0"
+      SCRAPE_START_DELAY_JITTER_SECONDS: "1800"
+      SCRAPE_DELAY_SECONDS: "1.0"
+      SCRAPE_DELAY_JITTER_SECONDS: "0"
+      SCRAPE_REDIRECT_DELAY_SECONDS: "1.0"
+      SCRAPE_REDIRECT_DELAY_JITTER_SECONDS: "1.0"
 
       # Directories
       DOWNLOAD_DIR: /app/downloads

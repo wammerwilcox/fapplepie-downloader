@@ -64,10 +64,10 @@ Runs the scraper on a schedule inside the container:
 docker-compose up -d
 ```
 
-The default compose file uses the versioned release image from GitHub Container Registry:
+The default compose file on this branch uses the pinned beta image from GitHub Container Registry:
 
 ```yaml
-image: ghcr.io/wammerwilcox/fapplepie-downloader:1.1.0
+image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.2@sha256:18a591b46a314ade9cdb9537473f6c32faadba5ce935ce88001d6d91764f0f11
 ```
 
 ### One-Time Execution Mode
@@ -320,7 +320,7 @@ To update the script:
 git pull
 ```
 
-2. **Pull the pinned release image and restart**:
+2. **Pull the pinned beta image and restart**:
 
 ```bash
 docker-compose pull
@@ -329,15 +329,15 @@ docker-compose up -d
 
 ## Production Considerations
 
-### Use versioned release images
+### Use versioned beta images
 
-The checked-in `docker-compose.yml` uses a versioned GHCR image:
+The checked-in `docker-compose.yml` uses a pinned GHCR beta image:
 
 ```yaml
-image: ghcr.io/wammerwilcox/fapplepie-downloader:1.1.0
+image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.2@sha256:18a591b46a314ade9cdb9537473f6c32faadba5ce935ce88001d6d91764f0f11
 ```
 
-Renovate can update this version when a newer release image is available.
+For multi-architecture deployments that should select the platform automatically, use the tag without an architecture-specific digest.
 
 ### Monitor container health
 
@@ -365,7 +365,7 @@ To run multiple instances with different schedules:
 ```yaml
 services:
   downloader-morning:
-    image: ghcr.io/wammerwilcox/fapplepie-downloader:1.1.0
+    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.2
     environment:
       CRON_SCHEDULE: "0 6 * * *"
     volumes:
@@ -373,7 +373,7 @@ services:
       - ./logs-morning:/app/logs
 
   downloader-evening:
-    image: ghcr.io/wammerwilcox/fapplepie-downloader:1.1.0
+    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.2
     environment:
       CRON_SCHEDULE: "0 18 * * *"
     volumes:
@@ -383,8 +383,8 @@ services:
 
 ## Published Image
 
-Release images are published to GitHub Container Registry:
+Beta images are published to GitHub Container Registry:
 
 ```bash
-docker pull ghcr.io/wammerwilcox/fapplepie-downloader:1.1.0
+docker pull ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.2
 ```
