@@ -207,6 +207,13 @@ docker run --rm \
   fapplepie-downloader once
 ```
 
+### Probe scraper
+
+```bash
+docker compose run --rm fapplepie-downloader python3 scraper.py --probe
+docker exec fapplepie-downloader python3 scraper.py --probe
+```
+
 ### Clear cache
 
 ```bash
