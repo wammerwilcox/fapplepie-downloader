@@ -207,11 +207,13 @@ docker run --rm \
   fapplepie-downloader once
 ```
 
-### Probe scraper
+### Probe scraper (local development image)
+
+Probe mode requires an image built from a version that includes `--probe`.
 
 ```bash
-docker compose run --rm fapplepie-downloader python3 scraper.py --probe
-docker exec fapplepie-downloader python3 scraper.py --probe
+docker compose -f docker-compose.dev.yml run --rm fapplepie-downloader python3 scraper.py --probe
+docker exec fapplepie-downloader-dev python3 scraper.py --probe
 ```
 
 ### Clear cache
