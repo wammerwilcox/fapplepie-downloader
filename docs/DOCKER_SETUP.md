@@ -168,8 +168,8 @@ environment:
 
 ### Volume Mounts
 
-| Host                     | Container                   | Purpose                |
-| ------------------------ | --------------------------- | ---------------------- |
+| Host              | Container        | Purpose           |
+| ----------------- | ---------------- | ----------------- |
 | `./app/downloads` | `/app/downloads` | Downloaded videos |
 | `./app/logs`      | `/app/logs`      | Execution logs    |
 | `./app/cache`     | `/app/cache`     | URL cache         |
