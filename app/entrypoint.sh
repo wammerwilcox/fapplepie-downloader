@@ -29,6 +29,11 @@ write_cron_env_file() {
         SCRAPE_REQUEST_ATTEMPTS
         SCRAPE_REQUEST_BACKOFF_SECONDS
         SCRAPE_DELAY_SECONDS
+        SCRAPE_DELAY_JITTER_SECONDS
+        SCRAPE_REDIRECT_DELAY_SECONDS
+        SCRAPE_REDIRECT_DELAY_JITTER_SECONDS
+        SCRAPE_START_DELAY_SECONDS
+        SCRAPE_START_DELAY_JITTER_SECONDS
         SCRAPE_DIRECT_FALLBACK_ON_403
         YT_DLP_PATH
         ARIA2C_PATH
@@ -69,7 +74,7 @@ SHELL=/bin/bash
 PATH=/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 BASH_ENV=/app/.cron_env.sh
 CRON_TZ=${cron_tz}
-${schedule} root /app/daily_download.sh >> /proc/1/fd/1 2>> /proc/1/fd/2
+${schedule} root APPLY_SCHEDULED_START_JITTER=1 /app/daily_download.sh >> /proc/1/fd/1 2>> /proc/1/fd/2
 EOF
 
     chmod 0644 "${cron_file}"

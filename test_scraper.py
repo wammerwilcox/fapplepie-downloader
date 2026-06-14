@@ -1,4 +1,5 @@
 import io
+import subprocess
 import sys
 import unittest
 from contextlib import nullcontext
@@ -277,6 +278,92 @@ class ScraperTransportTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.phase, "robots")
 
+    def test_sleep_with_jitter_uses_base_plus_random_jitter(self) -> None:
+        with patch.object(scraper.random, "uniform", return_value=0.75) as uniform:
+            with patch.object(scraper.time, "sleep") as sleep_mock:
+                scraper._sleep_with_jitter(
+                    base_seconds=1.0,
+                    jitter_seconds=2.0,
+                    reason="test delay",
+                )
+
+        uniform.assert_called_once_with(0, 2.0)
+        sleep_mock.assert_called_once_with(1.75)
+
+    def test_sleep_with_jitter_skips_zero_total_delay(self) -> None:
+        with patch.object(scraper.random, "uniform") as uniform:
+            with patch.object(scraper.time, "sleep") as sleep_mock:
+                scraper._sleep_with_jitter(
+                    base_seconds=0,
+                    jitter_seconds=0,
+                    reason="test delay",
+                )
+
+        uniform.assert_not_called()
+        sleep_mock.assert_not_called()
+
+    def test_cli_start_jitter_delays_only_scheduled_actions(self) -> None:
+        result = scraper.ProbeResult(
+            working_base_url="https://fapplepie.com/videos",
+            final_base_url="https://www.fapplepie.com/videos",
+            video_count=1,
+            has_next_page=False,
+            sample_url="https://fapplepie.com/watch/abc",
+            sample_final_url="https://www.eporner.com/video-abc/example/",
+        )
+
+        with patch.object(scraper, "_get_proxy_settings", return_value=(None, None)):
+            with patch.object(scraper, "_log_proxy_self_check"):
+                with patch.object(scraper, "_sleep_with_jitter") as sleep_with_jitter:
+                    with patch.object(scraper, "scrape_videos") as scrape_videos:
+                        with patch.object(scraper, "download_videos"):
+                            with patch.dict(
+                                "os.environ",
+                                {
+                                    "SCRAPE_START_DELAY_SECONDS": "5",
+                                    "SCRAPE_START_DELAY_JITTER_SECONDS": "10",
+                                },
+                                clear=False,
+                            ):
+                                scraper.main(["--scheduled", "--scrape"])
+                                scraper.main(["--scrape"])
+
+                    with patch.object(scraper, "probe_scraper", return_value=result):
+                        scraper.main(["--probe"])
+
+        sleep_with_jitter.assert_called_once_with(
+            base_seconds=5.0,
+            jitter_seconds=10.0,
+            reason="scrape start delay",
+        )
+        self.assertEqual(scrape_videos.call_count, 2)
+
+    def test_cron_marks_daily_download_run_as_scheduled(self) -> None:
+        script_path = Path(__file__).resolve().parent / "app" / "daily_download.sh"
+        entrypoint_path = Path(__file__).resolve().parent / "app" / "entrypoint.sh"
+
+        daily_result = subprocess.run(
+            ["bash", "-n", str(script_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        entrypoint_result = subprocess.run(
+            ["bash", "-n", str(entrypoint_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        daily_text = script_path.read_text()
+        entrypoint_text = entrypoint_path.read_text()
+
+        self.assertEqual(daily_result.returncode, 0, daily_result.stderr)
+        self.assertEqual(entrypoint_result.returncode, 0, entrypoint_result.stderr)
+        self.assertIn("APPLY_SCHEDULED_START_JITTER", daily_text)
+        self.assertIn("SCRAPER_ARGS=(--scheduled", daily_text)
+        self.assertIn("APPLY_SCHEDULED_START_JITTER=1 /app/daily_download.sh", entrypoint_text)
+
     def test_cli_probe_calls_probe_scraper_and_exits_successfully(self) -> None:
         result = scraper.ProbeResult(
             working_base_url="https://fapplepie.com/videos",
@@ -476,6 +563,83 @@ class ScraperTransportTests(unittest.TestCase):
         self.assertIn("status=403", message)
         self.assertIn("fallback_attempted=True", message)
         self.assertIn("final_transport=direct", message)
+
+    def test_scrape_videos_applies_jittered_page_and_redirect_delays(self) -> None:
+        first_response = make_response(200, "https://www.fapplepie.com/videos")
+        first_response._content = b'<h3><a href="/watch/abc">One</a></h3><a>next \xe2\x80\xba</a>'
+        second_response = make_response(200, "https://www.fapplepie.com/videos?page=2")
+        second_response._content = b'<h3><a href="/watch/def">Two</a></h3>'
+        first_redirect = make_response(200, "https://www.eporner.com/video-abc/example/")
+        second_redirect = make_response(200, "https://www.eporner.com/video-def/example/")
+        session = Mock()
+        session.headers = {"User-Agent": "test-agent"}
+        cache = {"resolved_urls": {}, "downloaded_urls": []}
+
+        with TemporaryDirectory() as tmp_dir:
+            with patch.object(scraper, "BASE_DIR", Path(tmp_dir)):
+                with patch.object(scraper, "load_cache_locked", return_value=cache):
+                    with patch.object(scraper, "save_cache_locked"):
+                        with patch.object(
+                            scraper,
+                            "_build_scrape_session",
+                            return_value=nullcontext(session),
+                        ):
+                            with patch.object(
+                                scraper,
+                                "_resolve_working_base_url",
+                                return_value=(
+                                    "https://www.fapplepie.com/videos",
+                                    first_response,
+                                ),
+                            ):
+                                with patch.object(
+                                    scraper,
+                                    "_fetch_robots_txt",
+                                    return_value=None,
+                                ):
+                                    with patch.object(
+                                        scraper,
+                                        "_request_for_scrape",
+                                        side_effect=[
+                                            second_response,
+                                            first_redirect,
+                                            second_redirect,
+                                        ],
+                                    ):
+                                        with patch.object(
+                                            scraper,
+                                            "_sleep_with_jitter",
+                                        ) as sleep_with_jitter:
+                                            with patch.dict(
+                                                "os.environ",
+                                                {
+                                                    "SCRAPE_DELAY_SECONDS": "1",
+                                                    "SCRAPE_DELAY_JITTER_SECONDS": "2",
+                                                    "SCRAPE_REDIRECT_DELAY_SECONDS": "3",
+                                                    "SCRAPE_REDIRECT_DELAY_JITTER_SECONDS": "4",
+                                                },
+                                                clear=False,
+                                            ):
+                                                scraper.scrape_videos(
+                                                    "https://www.fapplepie.com/videos",
+                                                    "video_urls.txt",
+                                                )
+
+        self.assertEqual(
+            sleep_with_jitter.call_args_list,
+            [
+                unittest.mock.call(
+                    base_seconds=1.0,
+                    jitter_seconds=2.0,
+                    reason="next page delay",
+                ),
+                unittest.mock.call(
+                    base_seconds=3.0,
+                    jitter_seconds=4.0,
+                    reason="redirect resolution delay",
+                ),
+            ],
+        )
 
     def test_request_retries_non_http_failures(self) -> None:
         session = Mock()

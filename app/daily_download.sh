@@ -39,9 +39,16 @@ log "Script directory: ${SCRIPT_DIR}"
 cd "${SCRIPT_DIR}" || exit 1
 source "${VENV_PATH}/bin/activate" || exit 1
 
-# Run the scraper with --all option (scrape and download)
-log "Running: python3 scraper.py --all"
-python3 scraper.py --all >> "${LOG_FILE}" 2>&1
+# Run the scraper with --all option (scrape and download). Cron sets
+# APPLY_SCHEDULED_START_JITTER=1 so scheduled runs can delay before network work
+# without slowing manual one-shot executions of this script.
+SCRAPER_ARGS=(--all)
+if [ "${APPLY_SCHEDULED_START_JITTER:-0}" = "1" ]; then
+    SCRAPER_ARGS=(--scheduled "${SCRAPER_ARGS[@]}")
+fi
+
+log "Running: python3 scraper.py ${SCRAPER_ARGS[*]}"
+python3 scraper.py "${SCRAPER_ARGS[@]}" >> "${LOG_FILE}" 2>&1
 SCRAPER_EXIT_CODE=$?
 
 if [ $SCRAPER_EXIT_CODE -eq 0 ]; then
