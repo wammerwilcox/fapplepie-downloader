@@ -277,6 +277,59 @@ class ScraperTransportTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.phase, "robots")
 
+    def test_cli_probe_calls_probe_scraper_and_exits_successfully(self) -> None:
+        result = scraper.ProbeResult(
+            working_base_url="https://fapplepie.com/videos",
+            final_base_url="https://www.fapplepie.com/videos",
+            video_count=1,
+            has_next_page=False,
+            sample_url="https://fapplepie.com/watch/abc",
+            sample_final_url="https://www.eporner.com/video-abc/example/",
+        )
+
+        with patch.object(scraper, "_get_proxy_settings", return_value=(None, None)):
+            with patch.object(scraper, "_log_proxy_self_check"):
+                with patch.object(
+                    scraper,
+                    "probe_scraper",
+                    return_value=result,
+                ) as probe_scraper:
+                    with patch.object(scraper, "scrape_videos") as scrape_videos:
+                        with patch.object(scraper, "download_videos") as download_videos:
+                            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                                with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                                    exit_code = scraper.main(["--probe"])
+
+        self.assertEqual(exit_code, 0)
+        probe_scraper.assert_called_once_with("https://fapplepie.com/videos")
+        scrape_videos.assert_not_called()
+        download_videos.assert_not_called()
+        self.assertIn(result.format_success(), stdout.getvalue())
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_cli_probe_failure_exits_nonzero(self) -> None:
+        error = scraper.ProbeError("base_url", "blocked")
+
+        with patch.object(scraper, "_get_proxy_settings", return_value=(None, None)):
+            with patch.object(scraper, "_log_proxy_self_check"):
+                with patch.object(
+                    scraper,
+                    "probe_scraper",
+                    side_effect=error,
+                ) as probe_scraper:
+                    with patch.object(scraper, "scrape_videos") as scrape_videos:
+                        with patch.object(scraper, "download_videos") as download_videos:
+                            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                                with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                                    exit_code = scraper.main(["--probe"])
+
+        self.assertEqual(exit_code, 4)
+        probe_scraper.assert_called_once_with("https://fapplepie.com/videos")
+        scrape_videos.assert_not_called()
+        download_videos.assert_not_called()
+        self.assertEqual(stdout.getvalue(), f"Fapplepie Downloader v{scraper.__version__}\n")
+        self.assertEqual(stderr.getvalue(), f"Probe failed: {error}\n")
+
     def test_scrape_videos_paginates_after_malformed_h3_links(self) -> None:
         first_response = make_response(200, "https://www.fapplepie.com/videos")
         first_response._content = b"<h3><a>Broken</a></h3><a>next \xe2\x80\xba</a>"
