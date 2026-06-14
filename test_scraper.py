@@ -22,6 +22,12 @@ def make_response(status_code: int, url: str) -> requests.Response:
 
 
 class ScraperTransportTests(unittest.TestCase):
+    probe_default_env = {
+        "SCRAPE_REQUEST_TIMEOUT_SECONDS": "10",
+        "SCRAPE_REQUEST_ATTEMPTS": "3",
+        "SCRAPE_REQUEST_BACKOFF_SECONDS": "1",
+    }
+
     def test_probe_error_includes_phase_and_message(self) -> None:
         error = scraper.ProbeError("base_url", "no candidates worked")
 
@@ -113,11 +119,16 @@ class ScraperTransportTests(unittest.TestCase):
                         "_request_for_scrape",
                         return_value=redirect,
                     ) as request_for_scrape:
-                        with patch.object(scraper, "load_cache_locked") as load_cache:
-                            with patch.object(scraper, "save_cache_locked") as save_cache:
-                                result = scraper.probe_scraper(
-                                    "https://fapplepie.com/videos"
-                                )
+                        with patch.dict(
+                            "os.environ",
+                            self.probe_default_env,
+                            clear=False,
+                        ):
+                            with patch.object(scraper, "load_cache_locked") as load_cache:
+                                with patch.object(scraper, "save_cache_locked") as save_cache:
+                                    result = scraper.probe_scraper(
+                                        "https://fapplepie.com/videos"
+                                    )
 
         self.assertEqual(result.video_count, 1)
         self.assertTrue(result.has_next_page)
@@ -159,6 +170,100 @@ class ScraperTransportTests(unittest.TestCase):
         self.assertIs(request_kwargs["transport_state"], transport_state)
         load_cache.assert_not_called()
         save_cache.assert_not_called()
+
+    def test_probe_scraper_reports_base_url_failure(self) -> None:
+        session = Mock()
+        session.headers = {"User-Agent": "test-agent"}
+
+        with patch.object(
+            scraper,
+            "_build_scrape_session",
+            return_value=nullcontext(session),
+        ):
+            with patch.object(
+                scraper,
+                "_resolve_working_base_url",
+                side_effect=requests.RequestException("blocked"),
+            ):
+                with self.assertRaises(scraper.ProbeError) as raised:
+                    scraper.probe_scraper("https://fapplepie.com/videos")
+
+        self.assertEqual(raised.exception.phase, "base_url")
+
+    def test_probe_scraper_reports_first_page_parse_failure(self) -> None:
+        first_page = make_response(200, "https://www.fapplepie.com/videos")
+        first_page._content = b"<html></html>"
+        session = Mock()
+        session.headers = {"User-Agent": "test-agent"}
+
+        with patch.object(
+            scraper,
+            "_build_scrape_session",
+            return_value=nullcontext(session),
+        ):
+            with patch.object(
+                scraper,
+                "_resolve_working_base_url",
+                return_value=("https://www.fapplepie.com/videos", first_page),
+            ):
+                with patch.object(scraper, "_fetch_robots_txt", return_value=None):
+                    with self.assertRaises(scraper.ProbeError) as raised:
+                        scraper.probe_scraper("https://fapplepie.com/videos")
+
+        self.assertEqual(raised.exception.phase, "first_page_parse")
+
+    def test_probe_scraper_reports_sample_redirect_failure(self) -> None:
+        first_page = make_response(200, "https://www.fapplepie.com/videos")
+        first_page._content = b'<h3><a href="/watch/abc">One</a></h3>'
+        session = Mock()
+        session.headers = {"User-Agent": "test-agent"}
+
+        with patch.object(
+            scraper,
+            "_build_scrape_session",
+            return_value=nullcontext(session),
+        ):
+            with patch.object(
+                scraper,
+                "_resolve_working_base_url",
+                return_value=("https://www.fapplepie.com/videos", first_page),
+            ):
+                with patch.object(scraper, "_fetch_robots_txt", return_value=None):
+                    with patch.object(
+                        scraper,
+                        "_request_for_scrape",
+                        side_effect=requests.ConnectionError("redirect blocked"),
+                    ):
+                        with self.assertRaises(scraper.ProbeError) as raised:
+                            scraper.probe_scraper("https://fapplepie.com/videos")
+
+        self.assertEqual(raised.exception.phase, "sample_redirect")
+
+    def test_probe_scraper_reports_robots_failure(self) -> None:
+        first_page = make_response(200, "https://www.fapplepie.com/videos")
+        first_page._content = b'<h3><a href="/watch/abc">One</a></h3>'
+        session = Mock()
+        session.headers = {"User-Agent": "test-agent"}
+
+        with patch.object(
+            scraper,
+            "_build_scrape_session",
+            return_value=nullcontext(session),
+        ):
+            with patch.object(
+                scraper,
+                "_resolve_working_base_url",
+                return_value=("https://www.fapplepie.com/videos", first_page),
+            ):
+                with patch.object(
+                    scraper,
+                    "_fetch_robots_txt",
+                    return_value="User-agent: *\nDisallow: /videos",
+                ):
+                    with self.assertRaises(scraper.ProbeError) as raised:
+                        scraper.probe_scraper("https://fapplepie.com/videos")
+
+        self.assertEqual(raised.exception.phase, "robots")
 
     def test_scrape_videos_paginates_after_malformed_h3_links(self) -> None:
         first_response = make_response(200, "https://www.fapplepie.com/videos")
