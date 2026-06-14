@@ -43,6 +43,45 @@ class ScraperTransportTests(unittest.TestCase):
         self.assertIn("has_next_page=True", summary)
         self.assertIn("sample_final_url=https://www.eporner.com/video-abc/example/", summary)
 
+    def test_extract_video_links_from_first_page(self) -> None:
+        html = b"""
+        <html>
+          <body>
+            <h3><a href="/watch/abc">One</a></h3>
+            <h3><a href="https://fapplepie.com/watch/def">Two</a></h3>
+            <a>next \xe2\x80\xba</a>
+          </body>
+        </html>
+        """
+        response = make_response(200, "https://www.fapplepie.com/videos")
+        response._content = html
+
+        links, has_next_page = scraper._parse_video_links(
+            response=response,
+            working_origin="https://www.fapplepie.com",
+        )
+
+        self.assertEqual(
+            links,
+            [
+                "https://www.fapplepie.com/watch/abc",
+                "https://fapplepie.com/watch/def",
+            ],
+        )
+        self.assertTrue(has_next_page)
+
+    def test_extract_video_links_reports_no_next_page(self) -> None:
+        response = make_response(200, "https://www.fapplepie.com/videos")
+        response._content = b'<h3><a href="/watch/abc">One</a></h3>'
+
+        links, has_next_page = scraper._parse_video_links(
+            response=response,
+            working_origin="https://www.fapplepie.com",
+        )
+
+        self.assertEqual(links, ["https://www.fapplepie.com/watch/abc"])
+        self.assertFalse(has_next_page)
+
     def test_proxied_403_retries_direct_and_pins_transport(self) -> None:
         session = Mock()
         session.get.side_effect = [
