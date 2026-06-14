@@ -804,6 +804,78 @@ def save_cache_locked(cache) -> None:
     finally:
         _release_lock(lock_file)
 
+
+def probe_scraper(base_url: str) -> ProbeResult:
+    request_timeout = float(os.environ.get("SCRAPE_REQUEST_TIMEOUT_SECONDS", "10"))
+    request_attempts = int(os.environ.get("SCRAPE_REQUEST_ATTEMPTS", "3"))
+    retry_backoff = float(os.environ.get("SCRAPE_REQUEST_BACKOFF_SECONDS", "1"))
+    transport_state = ScrapeTransportState()
+
+    with _build_scrape_session() as session:
+        try:
+            working_base_url, first_page_response = _resolve_working_base_url(
+                session=session,
+                base_url=base_url,
+                timeout=request_timeout,
+                max_attempts=request_attempts,
+                backoff_seconds=retry_backoff,
+                transport_state=transport_state,
+            )
+        except SCRAPE_REQUEST_EXCEPTIONS as exc:
+            raise ProbeError("base_url", str(exc)) from exc
+
+        parsed_working = urlparse(working_base_url)
+        working_origin = f"{parsed_working.scheme}://{parsed_working.netloc}"
+
+        robots_text = _fetch_robots_txt(
+            session,
+            working_base_url,
+            timeout=request_timeout,
+            max_attempts=request_attempts,
+            backoff_seconds=retry_backoff,
+            transport_state=transport_state,
+        )
+        user_agent = session.headers.get("User-Agent", "*")
+        if _robots_disallow(robots_text, working_base_url, user_agent):
+            raise ProbeError("robots", "robots.txt disallows scraping this path")
+
+        try:
+            first_page_response.raise_for_status()
+        except SCRAPE_REQUEST_EXCEPTIONS as exc:
+            raise ProbeError("first_page_fetch", str(exc)) from exc
+
+        video_urls, has_next_page = _parse_video_links(
+            first_page_response,
+            working_origin,
+        )
+        if not video_urls:
+            raise ProbeError("first_page_parse", "no video links found on first page")
+
+        sample_url = video_urls[0]
+        try:
+            redirect_response = _request_for_scrape(
+                session,
+                sample_url,
+                timeout=request_timeout,
+                allow_redirects=True,
+                max_attempts=request_attempts,
+                backoff_seconds=retry_backoff,
+                transport_state=transport_state,
+            )
+            redirect_response.raise_for_status()
+        except Exception as exc:
+            raise ProbeError("sample_redirect", str(exc)) from exc
+
+        return ProbeResult(
+            working_base_url=working_base_url,
+            final_base_url=first_page_response.url,
+            video_count=len(video_urls),
+            has_next_page=has_next_page,
+            sample_url=sample_url,
+            sample_final_url=redirect_response.url,
+        )
+
+
 def scrape_videos(base_url, output_file):
     """
     Scrape video URLs from fapplepie.com across all pages
