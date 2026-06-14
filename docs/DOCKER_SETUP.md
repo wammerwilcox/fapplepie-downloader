@@ -138,6 +138,23 @@ Notes:
 - The direct fallback only affects HTML scraping and fapplepie redirect resolution.
   Downloader proxy handling stays unchanged.
 
+### Polite Timing
+
+Images that include probe mode also support pacing controls for scraper traffic.
+Scheduled cron runs apply start jitter before network work begins; manual `once`
+commands, direct `scraper.py` commands, and manual `daily_download.sh` runs start
+immediately.
+
+```yaml
+environment:
+  SCRAPE_START_DELAY_SECONDS: "0"
+  SCRAPE_START_DELAY_JITTER_SECONDS: "1800"
+  SCRAPE_DELAY_SECONDS: "1.0"
+  SCRAPE_DELAY_JITTER_SECONDS: "0"
+  SCRAPE_REDIRECT_DELAY_SECONDS: "1.0"
+  SCRAPE_REDIRECT_DELAY_JITTER_SECONDS: "1.0"
+```
+
 ### Cron Schedule Examples
 
 | Schedule       | Meaning          |
