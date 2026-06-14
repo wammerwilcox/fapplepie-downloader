@@ -28,6 +28,10 @@ class ScraperTransportTests(unittest.TestCase):
         "SCRAPE_REQUEST_BACKOFF_SECONDS": "1",
     }
 
+    def probe_scraper_with_default_env(self, base_url: str) -> scraper.ProbeResult:
+        with patch.dict("os.environ", self.probe_default_env, clear=False):
+            return scraper.probe_scraper(base_url)
+
     def test_probe_error_includes_phase_and_message(self) -> None:
         error = scraper.ProbeError("base_url", "no candidates worked")
 
@@ -186,7 +190,9 @@ class ScraperTransportTests(unittest.TestCase):
                 side_effect=requests.RequestException("blocked"),
             ):
                 with self.assertRaises(scraper.ProbeError) as raised:
-                    scraper.probe_scraper("https://fapplepie.com/videos")
+                    self.probe_scraper_with_default_env(
+                        "https://fapplepie.com/videos"
+                    )
 
         self.assertEqual(raised.exception.phase, "base_url")
 
@@ -208,7 +214,9 @@ class ScraperTransportTests(unittest.TestCase):
             ):
                 with patch.object(scraper, "_fetch_robots_txt", return_value=None):
                     with self.assertRaises(scraper.ProbeError) as raised:
-                        scraper.probe_scraper("https://fapplepie.com/videos")
+                        self.probe_scraper_with_default_env(
+                            "https://fapplepie.com/videos"
+                        )
 
         self.assertEqual(raised.exception.phase, "first_page_parse")
 
@@ -235,7 +243,9 @@ class ScraperTransportTests(unittest.TestCase):
                         side_effect=requests.ConnectionError("redirect blocked"),
                     ):
                         with self.assertRaises(scraper.ProbeError) as raised:
-                            scraper.probe_scraper("https://fapplepie.com/videos")
+                            self.probe_scraper_with_default_env(
+                                "https://fapplepie.com/videos"
+                            )
 
         self.assertEqual(raised.exception.phase, "sample_redirect")
 
@@ -261,7 +271,9 @@ class ScraperTransportTests(unittest.TestCase):
                     return_value="User-agent: *\nDisallow: /videos",
                 ):
                     with self.assertRaises(scraper.ProbeError) as raised:
-                        scraper.probe_scraper("https://fapplepie.com/videos")
+                        self.probe_scraper_with_default_env(
+                            "https://fapplepie.com/videos"
+                        )
 
         self.assertEqual(raised.exception.phase, "robots")
 
