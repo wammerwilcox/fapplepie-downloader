@@ -75,6 +75,35 @@ class ScrapeTransportState:
     mode: str = SCRAPE_TRANSPORT_CONFIGURED
 
 
+class ProbeError(Exception):
+    """Probe failure annotated with the scrape phase that failed."""
+
+    def __init__(self, phase: str, message: str):
+        super().__init__(f"{phase}: {message}")
+        self.phase = phase
+
+
+@dataclass
+class ProbeResult:
+    working_base_url: str
+    final_base_url: str
+    video_count: int
+    has_next_page: bool
+    sample_url: str
+    sample_final_url: str
+
+    def format_success(self) -> str:
+        return (
+            "Probe successful: "
+            f"working_base_url={self.working_base_url} "
+            f"final_base_url={self.final_base_url} "
+            f"videos_found={self.video_count} "
+            f"has_next_page={self.has_next_page} "
+            f"sample_url={self.sample_url} "
+            f"sample_final_url={self.sample_final_url}"
+        )
+
+
 def _redact_proxy_url(proxy_url: str) -> str:
     """Hide proxy password in logs while keeping host/port visible."""
     parsed = urlparse(proxy_url)
@@ -656,6 +685,31 @@ def _robots_disallow(
         )
     return not is_allowed
 
+
+def _has_video_headings(response: requests.Response) -> bool:
+    soup = BeautifulSoup(response.content, 'html.parser')
+    return soup.find('h3') is not None
+
+
+def _parse_video_links(
+    response: requests.Response,
+    working_origin: str,
+) -> tuple[list[str], bool]:
+    soup = BeautifulSoup(response.content, 'html.parser')
+    video_urls: list[str] = []
+
+    for h3 in soup.find_all('h3'):
+        link = h3.find('a')
+        if link and link.get('href'):
+            full_url = link['href']
+            if not full_url.startswith('http'):
+                full_url = working_origin + full_url
+            video_urls.append(full_url)
+
+    has_next_page = soup.find('a', string='next ›') is not None
+    return video_urls, has_next_page
+
+
 # Read version from VERSION file
 def get_version():
     """Get version from VERSION file in project root"""
@@ -750,6 +804,78 @@ def save_cache_locked(cache) -> None:
     finally:
         _release_lock(lock_file)
 
+
+def probe_scraper(base_url: str) -> ProbeResult:
+    request_timeout = float(os.environ.get("SCRAPE_REQUEST_TIMEOUT_SECONDS", "10"))
+    request_attempts = int(os.environ.get("SCRAPE_REQUEST_ATTEMPTS", "3"))
+    retry_backoff = float(os.environ.get("SCRAPE_REQUEST_BACKOFF_SECONDS", "1"))
+    transport_state = ScrapeTransportState()
+
+    with _build_scrape_session() as session:
+        try:
+            working_base_url, first_page_response = _resolve_working_base_url(
+                session=session,
+                base_url=base_url,
+                timeout=request_timeout,
+                max_attempts=request_attempts,
+                backoff_seconds=retry_backoff,
+                transport_state=transport_state,
+            )
+        except SCRAPE_REQUEST_EXCEPTIONS as exc:
+            raise ProbeError("base_url", str(exc)) from exc
+
+        parsed_working = urlparse(working_base_url)
+        working_origin = f"{parsed_working.scheme}://{parsed_working.netloc}"
+
+        robots_text = _fetch_robots_txt(
+            session,
+            working_base_url,
+            timeout=request_timeout,
+            max_attempts=request_attempts,
+            backoff_seconds=retry_backoff,
+            transport_state=transport_state,
+        )
+        user_agent = session.headers.get("User-Agent", "*")
+        if _robots_disallow(robots_text, working_base_url, user_agent):
+            raise ProbeError("robots", "robots.txt disallows scraping this path")
+
+        try:
+            first_page_response.raise_for_status()
+        except SCRAPE_REQUEST_EXCEPTIONS as exc:
+            raise ProbeError("first_page_fetch", str(exc)) from exc
+
+        video_urls, has_next_page = _parse_video_links(
+            first_page_response,
+            working_origin,
+        )
+        if not video_urls:
+            raise ProbeError("first_page_parse", "no video links found on first page")
+
+        sample_url = video_urls[0]
+        try:
+            redirect_response = _request_for_scrape(
+                session,
+                sample_url,
+                timeout=request_timeout,
+                allow_redirects=True,
+                max_attempts=request_attempts,
+                backoff_seconds=retry_backoff,
+                transport_state=transport_state,
+            )
+            redirect_response.raise_for_status()
+        except SCRAPE_REQUEST_EXCEPTIONS as exc:
+            raise ProbeError("sample_redirect", str(exc)) from exc
+
+        return ProbeResult(
+            working_base_url=working_base_url,
+            final_base_url=first_page_response.url,
+            video_count=len(video_urls),
+            has_next_page=has_next_page,
+            sample_url=sample_url,
+            sample_final_url=redirect_response.url,
+        )
+
+
 def scrape_videos(base_url, output_file):
     """
     Scrape video URLs from fapplepie.com across all pages
@@ -826,34 +952,21 @@ def scrape_videos(base_url, output_file):
                         sys.exit(2)
                     break
 
-                soup = BeautifulSoup(response.content, 'html.parser')
+                page_video_urls, has_next_page = _parse_video_links(
+                    response,
+                    working_origin,
+                )
 
-                # Find all h3 tags (based on the page structure)
-                h3_tags = soup.find_all('h3')
-
-                if not h3_tags:
+                if not page_video_urls and not _has_video_headings(response):
                     print(f"No videos found on page {page}. Stopping pagination.")
                     break
 
-                page_video_count = 0
-
-                for h3 in h3_tags:
-                    # Find the link within the h3 tag
-                    link = h3.find('a')
-                    if link and link.get('href'):
-                        full_url = link['href']
-                        # Handle relative URLs
-                        if not full_url.startswith('http'):
-                            full_url = working_origin + full_url
-
-                        all_video_urls.append(full_url)
-                        page_video_count += 1
+                all_video_urls.extend(page_video_urls)
+                page_video_count = len(page_video_urls)
 
                 print(f"  Found {page_video_count} videos on page {page}")
 
-                # Check if there's a next page link
-                next_page_link = soup.find('a', string='next ›')
-                if not next_page_link:
+                if not has_next_page:
                     print(f"No next page link found. Stopping pagination.")
                     break
 
@@ -1045,20 +1158,22 @@ def download_videos(urls_file='video_urls.txt', output_dir='downloads'):
     print(f"Cache saved to: {CACHE_PATH}")
     print(f"{'='*60}")
 
-if __name__ == '__main__':
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for scraper actions."""
     import argparse
-    
+
     parser = argparse.ArgumentParser(description='Scrape and download videos from fapplepie.com')
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     parser.add_argument('--scrape', action='store_true', default=False, help='Scrape videos from fapplepie.com')
     parser.add_argument('--download', action='store_true', default=False, help='Download videos from URLs')
+    parser.add_argument('--probe', action='store_true', default=False, help='Probe scraper connectivity without writing files')
     parser.add_argument('--all', action='store_true', default=False, help='Both scrape and download')
     parser.add_argument('--urls-file', default='video_urls.txt', help='File containing URLs (default: video_urls.txt)')
     parser.add_argument('--output-dir', default='downloads', help='Output directory for downloads (default: downloads)')
     parser.add_argument('--clear-cache', action='store_true', help='Clear the processing cache and start fresh')
-    
-    args = parser.parse_args()
-    
+
+    args = parser.parse_args(argv)
+
     # Handle --clear-cache flag
     if args.clear_cache:
         try:
@@ -1069,7 +1184,7 @@ if __name__ == '__main__':
         finally:
             if 'lock_file' in locals():
                 _release_lock(lock_file)
-        sys.exit(0)
+        return 0
 
     print(f"Fapplepie Downloader v{__version__}")
     try:
@@ -1077,19 +1192,27 @@ if __name__ == '__main__':
         _log_proxy_self_check()
     except ValueError as e:
         print(f"Proxy configuration error: {e}", file=sys.stderr)
-        sys.exit(2)
-    
+        return 2
+
     # If no arguments specified, default to scraping only
-    if not args.scrape and not args.download and not args.all:
+    if not args.scrape and not args.download and not args.probe and not args.all:
         args.scrape = True
-    
+
     # Handle --all flag
     if args.all:
         args.scrape = True
         args.download = True
-    
+
     url = 'https://fapplepie.com/videos'
-    
+
+    if args.probe:
+        try:
+            result = probe_scraper(url)
+        except ProbeError as e:
+            print(f"Probe failed: {e}", file=sys.stderr)
+            return 4
+        print(result.format_success())
+
     urls_file = args.urls_file
     if _running_in_docker():
         urls_file = str(BASE_DIR / 'video_urls.txt')
@@ -1097,6 +1220,12 @@ if __name__ == '__main__':
     if args.scrape:
         scrape_videos(url, urls_file)
         print()
-    
+
     if args.download:
         download_videos(urls_file, args.output_dir)
+
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

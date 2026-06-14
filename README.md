@@ -70,6 +70,9 @@ python3 app/scraper.py --download
 # Scrape and download
 python3 app/scraper.py --all
 
+# Probe scraper path without writing state
+python3 app/scraper.py --probe
+
 # Clear generated cache
 python3 app/scraper.py --clear-cache
 
@@ -106,6 +109,8 @@ Additional proxy controls:
 - `NORDVPN_PROXY_SCOPE=fapplepie` proxies only fapplepie traffic.
 - `NORDVPN_PROXY_SCOPE=all` proxies all scraper/downloader traffic.
 - `SCRAPE_DIRECT_FALLBACK_ON_403=1` retries scraper requests directly after proxied HTTP 403 responses.
+
+Use probe mode to validate the scraper fetch/parse/redirect path without writing URL/cache state or downloading.
 
 ## Dependency Locking
 
