@@ -686,7 +686,15 @@ def _robots_disallow(
     return not is_allowed
 
 
-def _parse_video_links(response, working_origin: str) -> tuple[list[str], bool]:
+def _has_video_headings(response: requests.Response) -> bool:
+    soup = BeautifulSoup(response.content, 'html.parser')
+    return soup.find('h3') is not None
+
+
+def _parse_video_links(
+    response: requests.Response,
+    working_origin: str,
+) -> tuple[list[str], bool]:
     soup = BeautifulSoup(response.content, 'html.parser')
     video_urls: list[str] = []
 
@@ -877,7 +885,7 @@ def scrape_videos(base_url, output_file):
                     working_origin,
                 )
 
-                if not page_video_urls:
+                if not page_video_urls and not _has_video_headings(response):
                     print(f"No videos found on page {page}. Stopping pagination.")
                     break
 
