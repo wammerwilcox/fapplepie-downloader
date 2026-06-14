@@ -14,6 +14,7 @@ import tempfile
 import time
 import logging
 import shutil
+import random
 from urllib.parse import quote, urlparse, urlunparse
 from urllib.robotparser import RobotFileParser
 from dataclasses import dataclass
@@ -268,6 +269,23 @@ def _request_impersonation_kwargs(session, url: str) -> dict:
     ):
         return {"impersonate": "chrome"}
     return {}
+
+
+def _sleep_with_jitter(
+    *,
+    base_seconds: float,
+    jitter_seconds: float,
+    reason: str,
+) -> None:
+    base_seconds = max(0.0, base_seconds)
+    jitter_seconds = max(0.0, jitter_seconds)
+    jitter = random.uniform(0, jitter_seconds) if jitter_seconds > 0 else 0.0
+    sleep_seconds = base_seconds + jitter
+    if sleep_seconds <= 0:
+        return
+
+    logger.info("%s: sleeping %.1fs", reason, sleep_seconds)
+    time.sleep(sleep_seconds)
 
 
 def _transport_proxies_for_request(
@@ -891,6 +909,11 @@ def scrape_videos(base_url, output_file):
         request_attempts = int(os.environ.get("SCRAPE_REQUEST_ATTEMPTS", "3"))
         retry_backoff = float(os.environ.get("SCRAPE_REQUEST_BACKOFF_SECONDS", "1"))
         delay_seconds = float(os.environ.get("SCRAPE_DELAY_SECONDS", "1.0"))
+        delay_jitter_seconds = float(os.environ.get("SCRAPE_DELAY_JITTER_SECONDS", "0"))
+        redirect_delay_seconds = float(os.environ.get("SCRAPE_REDIRECT_DELAY_SECONDS", "1.0"))
+        redirect_delay_jitter_seconds = float(
+            os.environ.get("SCRAPE_REDIRECT_DELAY_JITTER_SECONDS", "1.0")
+        )
         transport_state = ScrapeTransportState()
         with _build_scrape_session() as session:
             working_base_url, first_page_response = _resolve_working_base_url(
@@ -970,8 +993,11 @@ def scrape_videos(base_url, output_file):
                     print(f"No next page link found. Stopping pagination.")
                     break
 
-                if delay_seconds > 0:
-                    time.sleep(delay_seconds)
+                _sleep_with_jitter(
+                    base_seconds=delay_seconds,
+                    jitter_seconds=delay_jitter_seconds,
+                    reason="next page delay",
+                )
 
                 page += 1
         
@@ -989,6 +1015,7 @@ def scrape_videos(base_url, output_file):
 
             for i, fapplepie_url in enumerate(all_video_urls, 1):
                 cached_final_url = cache['resolved_urls'].get(fapplepie_url)
+                resolved_via_network = False
                 if cached_final_url and not _is_stale_resolved_url(
                     fapplepie_url,
                     cached_final_url,
@@ -1017,6 +1044,7 @@ def scrape_videos(base_url, output_file):
                         final_url = redirect_response.url
                         resolved_urls.append(final_url)
                         cache['resolved_urls'][fapplepie_url] = final_url
+                        resolved_via_network = True
                         new_urls += 1
                     except Exception as e:
                         print(f"Warning: Could not fetch {fapplepie_url}: {e}", file=sys.stderr)
@@ -1024,6 +1052,12 @@ def scrape_videos(base_url, output_file):
 
                 if i % 50 == 0:
                     print(f"Resolved {i}/{len(all_video_urls)} redirects (cached: {cached_urls}, new: {new_urls})...")
+                if i < len(all_video_urls) and resolved_via_network:
+                    _sleep_with_jitter(
+                        base_seconds=redirect_delay_seconds,
+                        jitter_seconds=redirect_delay_jitter_seconds,
+                        reason="redirect resolution delay",
+                    )
         
         # Write URLs to file
         with open(output_path, 'w') as f:
@@ -1167,6 +1201,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--scrape', action='store_true', default=False, help='Scrape videos from fapplepie.com')
     parser.add_argument('--download', action='store_true', default=False, help='Download videos from URLs')
     parser.add_argument('--probe', action='store_true', default=False, help='Probe scraper connectivity without writing files')
+    parser.add_argument('--scheduled', action='store_true', default=False, help=argparse.SUPPRESS)
     parser.add_argument('--all', action='store_true', default=False, help='Both scrape and download')
     parser.add_argument('--urls-file', default='video_urls.txt', help='File containing URLs (default: video_urls.txt)')
     parser.add_argument('--output-dir', default='downloads', help='Output directory for downloads (default: downloads)')
@@ -1204,6 +1239,17 @@ def main(argv: list[str] | None = None) -> int:
         args.download = True
 
     url = 'https://fapplepie.com/videos'
+
+    if args.scheduled and (args.scrape or args.download):
+        start_delay = float(os.environ.get("SCRAPE_START_DELAY_SECONDS", "0"))
+        start_delay_jitter = float(
+            os.environ.get("SCRAPE_START_DELAY_JITTER_SECONDS", "1800")
+        )
+        _sleep_with_jitter(
+            base_seconds=start_delay,
+            jitter_seconds=start_delay_jitter,
+            reason="scrape start delay",
+        )
 
     if args.probe:
         try:

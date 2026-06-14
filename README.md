@@ -112,6 +112,17 @@ Additional proxy controls:
 
 Use probe mode to validate the scraper fetch/parse/redirect path without writing URL/cache state or downloading.
 
+### Polite Timing
+
+Scheduled scraper runs apply a random start delay before network work begins. Manual runs such as `--all`, `--scrape`, `--download`, `--probe`, and direct `daily_download.sh` executions start immediately.
+
+- `SCRAPE_START_DELAY_SECONDS=0` sets a fixed scheduled-run start delay.
+- `SCRAPE_START_DELAY_JITTER_SECONDS=1800` adds up to 30 minutes of scheduled-run start jitter.
+- `SCRAPE_DELAY_SECONDS=1.0` waits between paginated directory pages.
+- `SCRAPE_DELAY_JITTER_SECONDS=0` adds optional jitter to page waits.
+- `SCRAPE_REDIRECT_DELAY_SECONDS=1.0` waits between uncached redirect-resolution requests.
+- `SCRAPE_REDIRECT_DELAY_JITTER_SECONDS=1.0` adds jitter to redirect waits.
+
 ## Dependency Locking
 
 Direct Python dependencies live in `app/requirements.in`; the installed lockfile is `app/requirements.txt`.
