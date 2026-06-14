@@ -863,7 +863,7 @@ def probe_scraper(base_url: str) -> ProbeResult:
                 transport_state=transport_state,
             )
             redirect_response.raise_for_status()
-        except Exception as exc:
+        except SCRAPE_REQUEST_EXCEPTIONS as exc:
             raise ProbeError("sample_redirect", str(exc)) from exc
 
         return ProbeResult(
