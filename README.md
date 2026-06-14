@@ -34,8 +34,8 @@ docker compose logs -f
 docker compose down
 ```
 
-The default compose file uses the pinned release image from GitHub Container Registry:
-`ghcr.io/wammerwilcox/fapplepie-downloader:1.1.0`. Runtime state is written under `app/cache/`, `app/downloads/`, and `app/logs/`; those paths are ignored by Git.
+The default compose file uses the pinned beta image from GitHub Container Registry:
+`ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.2@sha256:18a591b46a314ade9cdb9537473f6c32faadba5ce935ce88001d6d91764f0f11`. Runtime state is written under `app/cache/`, `app/downloads/`, and `app/logs/`; those paths are ignored by Git.
 
 For local image development, use:
 
