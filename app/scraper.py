@@ -1158,20 +1158,22 @@ def download_videos(urls_file='video_urls.txt', output_dir='downloads'):
     print(f"Cache saved to: {CACHE_PATH}")
     print(f"{'='*60}")
 
-if __name__ == '__main__':
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for scraper actions."""
     import argparse
-    
+
     parser = argparse.ArgumentParser(description='Scrape and download videos from fapplepie.com')
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     parser.add_argument('--scrape', action='store_true', default=False, help='Scrape videos from fapplepie.com')
     parser.add_argument('--download', action='store_true', default=False, help='Download videos from URLs')
+    parser.add_argument('--probe', action='store_true', default=False, help='Probe scraper connectivity without writing files')
     parser.add_argument('--all', action='store_true', default=False, help='Both scrape and download')
     parser.add_argument('--urls-file', default='video_urls.txt', help='File containing URLs (default: video_urls.txt)')
     parser.add_argument('--output-dir', default='downloads', help='Output directory for downloads (default: downloads)')
     parser.add_argument('--clear-cache', action='store_true', help='Clear the processing cache and start fresh')
-    
-    args = parser.parse_args()
-    
+
+    args = parser.parse_args(argv)
+
     # Handle --clear-cache flag
     if args.clear_cache:
         try:
@@ -1182,7 +1184,7 @@ if __name__ == '__main__':
         finally:
             if 'lock_file' in locals():
                 _release_lock(lock_file)
-        sys.exit(0)
+        return 0
 
     print(f"Fapplepie Downloader v{__version__}")
     try:
@@ -1190,19 +1192,27 @@ if __name__ == '__main__':
         _log_proxy_self_check()
     except ValueError as e:
         print(f"Proxy configuration error: {e}", file=sys.stderr)
-        sys.exit(2)
-    
+        return 2
+
     # If no arguments specified, default to scraping only
-    if not args.scrape and not args.download and not args.all:
+    if not args.scrape and not args.download and not args.probe and not args.all:
         args.scrape = True
-    
+
     # Handle --all flag
     if args.all:
         args.scrape = True
         args.download = True
-    
+
     url = 'https://fapplepie.com/videos'
-    
+
+    if args.probe:
+        try:
+            result = probe_scraper(url)
+        except ProbeError as e:
+            print(f"Probe failed: {e}", file=sys.stderr)
+            return 4
+        print(result.format_success())
+
     urls_file = args.urls_file
     if _running_in_docker():
         urls_file = str(BASE_DIR / 'video_urls.txt')
@@ -1210,6 +1220,12 @@ if __name__ == '__main__':
     if args.scrape:
         scrape_videos(url, urls_file)
         print()
-    
+
     if args.download:
         download_videos(urls_file, args.output_dir)
+
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
