@@ -362,6 +362,8 @@ class ScraperTransportTests(unittest.TestCase):
         self.assertEqual(entrypoint_result.returncode, 0, entrypoint_result.stderr)
         self.assertIn("APPLY_SCHEDULED_START_JITTER", daily_text)
         self.assertIn("SCRAPER_ARGS=(--scheduled", daily_text)
+        self.assertIn('2>&1 | tee -a "${LOG_FILE}"', daily_text)
+        self.assertIn("SCRAPER_EXIT_CODE=${PIPESTATUS[0]}", daily_text)
         self.assertIn("APPLY_SCHEDULED_START_JITTER=1 /app/daily_download.sh", entrypoint_text)
 
     def test_cli_probe_calls_probe_scraper_and_exits_successfully(self) -> None:

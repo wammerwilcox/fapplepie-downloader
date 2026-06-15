@@ -48,8 +48,8 @@ if [ "${APPLY_SCHEDULED_START_JITTER:-0}" = "1" ]; then
 fi
 
 log "Running: python3 scraper.py ${SCRAPER_ARGS[*]}"
-python3 scraper.py "${SCRAPER_ARGS[@]}" >> "${LOG_FILE}" 2>&1
-SCRAPER_EXIT_CODE=$?
+python3 scraper.py "${SCRAPER_ARGS[@]}" 2>&1 | tee -a "${LOG_FILE}"
+SCRAPER_EXIT_CODE=${PIPESTATUS[0]}
 
 if [ $SCRAPER_EXIT_CODE -eq 0 ]; then
     log "SUCCESS: Scraper completed successfully"
