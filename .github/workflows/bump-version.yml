@@ -54,33 +54,18 @@ jobs:
           echo "new_version=${new_version}" >> "${GITHUB_OUTPUT}"
           echo "Bumped VERSION: $current -> $new_version"
 
-      - name: Create or update version bump PR
+      - name: Commit and push VERSION bump
         env:
-          BRANCH_NAME: chore/bump-version-after-deps
           GH_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
           NEW_VERSION: ${{ steps.bump.outputs.new_version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -B "${BRANCH_NAME}" origin/main
           git add VERSION
-          git commit -m "chore: bump VERSION to ${NEW_VERSION} after dependency update"
-          git push --force-with-lease "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${BRANCH_NAME}"
-
-          title="chore: bump VERSION to ${NEW_VERSION} after dependency update"
-          body="Bumps VERSION after a dependency update was merged into main."
-
-          if pr_number="$(gh pr view "${BRANCH_NAME}" --json number --jq .number 2>/dev/null)"; then
-            gh pr edit "${pr_number}" \
-              --title "${title}" \
-              --body "${body}"
-          else
-            gh pr create \
-              --title "${title}" \
-              --body "${body}" \
-              --base main \
-              --head "${BRANCH_NAME}"
-            pr_number="$(gh pr view "${BRANCH_NAME}" --json number --jq .number)"
+          if git diff --cached --quiet -- VERSION; then
+            echo "VERSION is already ${NEW_VERSION}; nothing to push."
+            exit 0
           fi
 
-          gh pr merge "${pr_number}" --auto --squash --delete-branch
+          git commit -m "chore: bump VERSION to ${NEW_VERSION} after dependency update"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
