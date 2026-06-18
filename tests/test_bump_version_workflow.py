@@ -1,18 +1,28 @@
+import json
 from pathlib import Path
 import unittest
 
 
 WORKFLOW = Path(".github/workflows/bump-version.yml")
+RENOVATE_CONFIG = Path("renovate.json")
 
 
-class BumpVersionWorkflowTests(unittest.TestCase):
-    def test_pushes_directly_to_main_without_pr_cli(self) -> None:
-        workflow = WORKFLOW.read_text()
+class RenovateVersionBumpTests(unittest.TestCase):
+    def test_renovate_bumps_version_inside_dependency_prs(self) -> None:
+        renovate = json.loads(RENOVATE_CONFIG.read_text())
 
-        self.assertNotIn("gh pr ", workflow)
-        self.assertNotIn("chore/bump-version-after-deps", workflow)
-        self.assertIn(
-            'git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main',
-            workflow,
+        self.assertEqual(
+            renovate["bumpVersions"],
+            [
+                {
+                    "filePatterns": ["VERSION"],
+                    "bumpType": "patch",
+                }
+            ],
         )
-        self.assertNotIn("--force", workflow)
+
+    def test_post_merge_bump_workflow_is_removed(self) -> None:
+        self.assertFalse(
+            WORKFLOW.exists(),
+            "Renovate should bump VERSION before merge; a post-merge main push workflow conflicts with repository rules.",
+        )
