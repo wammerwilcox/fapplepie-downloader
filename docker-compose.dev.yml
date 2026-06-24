@@ -14,7 +14,7 @@ services:
       - ./app/downloads:/app/downloads
       - ./app/logs:/app/logs
       - ./app/cache:/app/cache
-      - ./app/secrets:/app/secrets:ro
+      - ./app/secrets:/app/secrets
       # Mount source code for live development (optional)
       # - ./app/scraper.py:/app/scraper.py:ro
 

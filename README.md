@@ -143,7 +143,7 @@ environment:
   YT_DLP_COOKIES_FILE: /app/secrets/youtube.cookies.txt
 ```
 
-Cookies still expire on YouTube's schedule. Keep the host-side `app/secrets/youtube.cookies.txt` refreshed with your browser login, and the container will use the updated file on the next download run. Do not commit cookie files.
+Cookies still expire on YouTube's schedule. Keep the host-side `app/secrets/youtube.cookies.txt` refreshed with your browser login, and the container will use the updated file on the next download run. The cookie file must be mounted read/write because yt-dlp saves cookie jar updates when it exits. Do not commit cookie files.
 
 ### Polite Timing
 

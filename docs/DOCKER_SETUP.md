@@ -149,8 +149,9 @@ environment:
 ```
 
 Age-gated YouTube videos also need signed-in cookies. The compose files mount
-`./app/secrets` read-only at `/app/secrets`; place a Netscape-format cookie jar
-there and point yt-dlp at it:
+`./app/secrets` at `/app/secrets`; place a Netscape-format cookie jar there and
+point yt-dlp at it. This mount must be read/write because yt-dlp saves cookie
+jar updates when it exits:
 
 ```yaml
 environment:
