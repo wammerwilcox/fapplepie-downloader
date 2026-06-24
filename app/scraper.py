@@ -205,6 +205,25 @@ def _is_fapplepie_host(hostname: str | None) -> bool:
     return host == "fapplepie.com" or host.endswith(".fapplepie.com")
 
 
+def _hostname_matches_domain(hostname: str | None, domain: str) -> bool:
+    if not hostname:
+        return False
+    host = hostname.lower().rstrip(".")
+    normalized_domain = domain.strip().lower().lstrip(".").rstrip(".")
+    if not normalized_domain:
+        return False
+    return host == normalized_domain or host.endswith(f".{normalized_domain}")
+
+
+def _get_proxy_download_domains() -> list[str]:
+    raw_domains = os.environ.get("NORDVPN_PROXY_DOWNLOAD_DOMAINS", "")
+    return [
+        domain.strip()
+        for domain in raw_domains.split(",")
+        if domain.strip()
+    ]
+
+
 def _proxy_url_for_target(url: str) -> str | None:
     proxy_url, _ = _get_proxy_settings()
     if not proxy_url:
@@ -214,6 +233,11 @@ def _proxy_url_for_target(url: str) -> str | None:
         return proxy_url
     parsed = urlparse(url)
     if _is_fapplepie_host(parsed.hostname):
+        return proxy_url
+    if any(
+        _hostname_matches_domain(parsed.hostname, domain)
+        for domain in _get_proxy_download_domains()
+    ):
         return proxy_url
     return None
 

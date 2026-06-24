@@ -779,6 +779,46 @@ class ScraperTransportTests(unittest.TestCase):
 
         self.assertIn("outside trusted container paths", str(raised.exception))
 
+    def test_proxy_download_domains_route_selected_hosts_through_proxy(self) -> None:
+        scraper._get_proxy_settings.cache_clear()
+        scraper._get_proxy_scope.cache_clear()
+        try:
+            with patch.dict(
+                "os.environ",
+                {
+                    "NORDVPN_PROXY": "socks5h://proxy.example:1080",
+                    "NORDVPN_PROXY_SCOPE": "fapplepie",
+                    "NORDVPN_PROXY_DOWNLOAD_DOMAINS": "xhamster.com",
+                },
+                clear=False,
+            ):
+                self.assertEqual(
+                    scraper._proxy_url_for_target(
+                        "https://xhamster.com/videos/cake-on-cake-xhNrd5M",
+                    ),
+                    "socks5h://proxy.example:1080",
+                )
+                self.assertEqual(
+                    scraper._proxy_url_for_target(
+                        "https://www.xhamster.com/videos/cake-on-cake-xhNrd5M",
+                    ),
+                    "socks5h://proxy.example:1080",
+                )
+                self.assertEqual(
+                    scraper._proxy_url_for_target(
+                        "https://de.xhamster.com/videos/cake-on-cake-xhNrd5M",
+                    ),
+                    "socks5h://proxy.example:1080",
+                )
+                self.assertIsNone(
+                    scraper._proxy_url_for_target(
+                        "https://www.youtube.com/watch?v=abc123",
+                    )
+                )
+        finally:
+            scraper._get_proxy_settings.cache_clear()
+            scraper._get_proxy_scope.cache_clear()
+
     def test_build_yt_dlp_command_includes_cookie_file_and_js_runtime(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             cookie_file = Path(tmp_dir) / "youtube.cookies.txt"

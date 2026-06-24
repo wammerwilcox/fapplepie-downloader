@@ -128,6 +128,10 @@ Notes:
 - `NORDVPN_PROXY_SCOPE`:
   - `fapplepie` (default): proxy only `fapplepie.com` traffic
   - `all`: proxy all outbound traffic
+- `NORDVPN_PROXY_DOWNLOAD_DOMAINS` is a comma-separated list of downloader
+  hosts that should use the configured proxy even when `NORDVPN_PROXY_SCOPE` is
+  `fapplepie`. For example, `xhamster.com` also matches subdomains such as
+  `de.xhamster.com`.
 - `SCRAPE_DIRECT_FALLBACK_ON_403`:
   - `1` (default): retry `fapplepie.com` scrape requests directly if the proxied request returns `403`
   - `0`: keep scrape requests proxy-only and fail fast on proxied `403`
@@ -136,7 +140,8 @@ Notes:
 - For `socks5://` or `socks5h://` proxies, downloads use yt-dlp's native
   downloader because aria2c `--all-proxy` does not accept SOCKS proxy format.
 - The direct fallback only affects HTML scraping and fapplepie redirect resolution.
-  Downloader proxy handling stays unchanged.
+  Downloader proxy handling is controlled by `NORDVPN_PROXY_SCOPE` and
+  `NORDVPN_PROXY_DOWNLOAD_DOMAINS`.
 
 ### YouTube Cookies and JavaScript Runtime
 

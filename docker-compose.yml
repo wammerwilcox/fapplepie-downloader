@@ -48,6 +48,7 @@ services:
       NORDVPN_PROXY: "${NORDVPN_PROXY:-}"
       NORDVPN_USER: "${NORDVPN_USER:-}"
       NORDVPN_PASS: "${NORDVPN_PASS:-}"
+      NORDVPN_PROXY_DOWNLOAD_DOMAINS: "${NORDVPN_PROXY_DOWNLOAD_DOMAINS:-}"
 
     # Restart policy
     restart: unless-stopped
