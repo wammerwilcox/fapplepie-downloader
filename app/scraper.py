@@ -409,6 +409,70 @@ def _log_binary_version(binary_path: str, binary_name: str) -> None:
         logger.warning("Unable to determine %s version", binary_name)
 
 
+def _yt_dlp_cookie_args() -> list[str]:
+    cookies_file = os.environ.get("YT_DLP_COOKIES_FILE", "").strip()
+    cookies_from_browser = os.environ.get("YT_DLP_COOKIES_FROM_BROWSER", "").strip()
+
+    if cookies_file and cookies_from_browser:
+        raise ValueError(
+            "Configure only one cookie source: YT_DLP_COOKIES_FILE or "
+            "YT_DLP_COOKIES_FROM_BROWSER."
+        )
+
+    if cookies_file:
+        cookies_path = Path(cookies_file).expanduser()
+        if not cookies_path.exists():
+            raise FileNotFoundError(
+                f"YT_DLP_COOKIES_FILE is set but does not exist: {cookies_file}"
+            )
+        return ["--cookies", str(cookies_path)]
+
+    if cookies_from_browser:
+        return ["--cookies-from-browser", cookies_from_browser]
+
+    return []
+
+
+def _yt_dlp_js_runtime_args() -> list[str]:
+    js_runtimes = os.environ.get("YT_DLP_JS_RUNTIMES", "").strip()
+    if not js_runtimes:
+        return []
+    return ["--js-runtimes", js_runtimes]
+
+
+def _build_yt_dlp_command(
+    yt_dlp_path: str,
+    aria2c_path: str,
+    output_template: str,
+    url: str,
+    proxy_url: str | None,
+    use_aria2: bool,
+) -> list[str]:
+    cmd = [
+        yt_dlp_path,
+        "-o", output_template,
+        "--concurrent-fragments", "4",
+        "-q",
+        *_yt_dlp_js_runtime_args(),
+        *_yt_dlp_cookie_args(),
+    ]
+
+    if use_aria2:
+        aria2_args = "aria2c:-x 16 -k 1M --max-connection-per-server=16 --split=16"
+        if proxy_url:
+            aria2_args = f"{aria2_args} --all-proxy={proxy_url}"
+        cmd.extend([
+            "--external-downloader", aria2c_path,
+            "--external-downloader-args", aria2_args,
+        ])
+
+    if proxy_url:
+        cmd.extend(["--proxy", proxy_url])
+
+    cmd.append(url)
+    return cmd
+
+
 def _fetch_robots_txt(
     session: requests.Session,
     base_url: str,
@@ -1143,27 +1207,14 @@ def download_videos(urls_file='video_urls.txt', output_dir='downloads'):
                     "(aria2c proxy format is incompatible)."
                 )
             
-            # Use yt-dlp to download the video with optimizations
-            cmd = [
-                yt_dlp_path,
-                '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
-                '--concurrent-fragments', '4',
-                '-q',  # Quiet mode for faster output processing
-            ]
-            if use_aria2_for_url:
-                # Use aria2c for faster parallel downloads when proxy format allows it.
-                aria2_args = (
-                    "aria2c:-x 16 -k 1M --max-connection-per-server=16 --split=16"
-                )
-                if target_proxy_url:
-                    aria2_args = f"{aria2_args} --all-proxy={target_proxy_url}"
-                cmd.extend([
-                    '--external-downloader', aria2c_path,
-                    '--external-downloader-args', aria2_args,
-                ])
-            if target_proxy_url:
-                cmd.extend(['--proxy', target_proxy_url])
-            cmd.append(url)
+            cmd = _build_yt_dlp_command(
+                yt_dlp_path=yt_dlp_path,
+                aria2c_path=aria2c_path,
+                output_template=os.path.join(output_path, "%(title)s.%(ext)s"),
+                url=url,
+                proxy_url=target_proxy_url,
+                use_aria2=use_aria2_for_url,
+            )
             
             result = subprocess.run(cmd, capture_output=True, text=True)
             

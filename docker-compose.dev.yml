@@ -14,6 +14,7 @@ services:
       - ./app/downloads:/app/downloads
       - ./app/logs:/app/logs
       - ./app/cache:/app/cache
+      - ./app/secrets:/app/secrets:ro
       # Mount source code for live development (optional)
       # - ./app/scraper.py:/app/scraper.py:ro
 
@@ -25,6 +26,9 @@ services:
       # Directories
       DOWNLOAD_DIR: /app/downloads
       LOG_DIR: /app/logs
+      YT_DLP_JS_RUNTIMES: "${YT_DLP_JS_RUNTIMES:-deno}"
+      YT_DLP_COOKIES_FILE: "${YT_DLP_COOKIES_FILE:-}"
+      YT_DLP_COOKIES_FROM_BROWSER: "${YT_DLP_COOKIES_FROM_BROWSER:-}"
 
       # Optional outbound proxy for scraper + downloader traffic.
       # Leave values empty to use direct network routing.

@@ -779,6 +779,58 @@ class ScraperTransportTests(unittest.TestCase):
 
         self.assertIn("outside trusted container paths", str(raised.exception))
 
+    def test_build_yt_dlp_command_includes_cookie_file_and_js_runtime(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            cookie_file = Path(tmp_dir) / "youtube.cookies.txt"
+            cookie_file.write_text("# Netscape HTTP Cookie File\n")
+
+            with patch.dict(
+                "os.environ",
+                {
+                    "YT_DLP_COOKIES_FILE": str(cookie_file),
+                    "YT_DLP_JS_RUNTIMES": "deno",
+                },
+                clear=False,
+            ):
+                cmd = scraper._build_yt_dlp_command(
+                    yt_dlp_path="/venv/bin/yt-dlp",
+                    aria2c_path="/usr/bin/aria2c",
+                    output_template="/app/downloads/%(title)s.%(ext)s",
+                    url="https://www.youtube.com/watch?v=abc123",
+                    proxy_url=None,
+                    use_aria2=True,
+                )
+
+        self.assertIn("--cookies", cmd)
+        self.assertIn(str(cookie_file), cmd)
+        self.assertIn("--js-runtimes", cmd)
+        self.assertIn("deno", cmd)
+
+    def test_build_yt_dlp_command_rejects_multiple_cookie_sources(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            cookie_file = Path(tmp_dir) / "youtube.cookies.txt"
+            cookie_file.write_text("# Netscape HTTP Cookie File\n")
+
+            with patch.dict(
+                "os.environ",
+                {
+                    "YT_DLP_COOKIES_FILE": str(cookie_file),
+                    "YT_DLP_COOKIES_FROM_BROWSER": "firefox",
+                },
+                clear=False,
+            ):
+                with self.assertRaises(ValueError) as raised:
+                    scraper._build_yt_dlp_command(
+                        yt_dlp_path="/venv/bin/yt-dlp",
+                        aria2c_path="/usr/bin/aria2c",
+                        output_template="/app/downloads/%(title)s.%(ext)s",
+                        url="https://www.youtube.com/watch?v=abc123",
+                        proxy_url=None,
+                        use_aria2=True,
+                    )
+
+        self.assertIn("only one cookie source", str(raised.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

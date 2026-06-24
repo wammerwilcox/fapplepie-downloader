@@ -34,8 +34,8 @@ docker compose logs -f
 docker compose down
 ```
 
-The default compose file uses the pinned beta image from GitHub Container Registry:
-`ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.3@sha256:2671902f34e9538a266f62be52c9d9dd4d6ed4f7735f778530d61023383569f1`. Runtime state is written under `app/cache/`, `app/downloads/`, and `app/logs/`; those paths are ignored by Git.
+The default compose file uses the versioned beta image from GitHub Container Registry:
+`ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.4`. Runtime state is written under `app/cache/`, `app/downloads/`, and `app/logs/`; those paths are ignored by Git.
 
 For local image development, use:
 
@@ -111,6 +111,39 @@ Additional proxy controls:
 - `SCRAPE_DIRECT_FALLBACK_ON_403=1` retries scraper requests directly after proxied HTTP 403 responses.
 
 Use probe mode to validate the scraper fetch/parse/redirect path without writing URL/cache state or downloading.
+
+### YouTube Auth and JavaScript Runtime
+
+The Docker image includes Deno and configures `YT_DLP_JS_RUNTIMES=deno` so yt-dlp can solve current YouTube JavaScript challenges.
+
+For age-gated or signed-in YouTube videos, export a Netscape-format cookies file on the host and mount it into the container. Chrome is supported by yt-dlp, as are Brave, Chromium, Edge, Firefox, Opera, Safari, Vivaldi, and Whale.
+
+To export cookies from Chrome without installing yt-dlp locally:
+
+1. On the host machine, open Chrome and sign in to YouTube with the account that can view the video.
+2. Install a trusted Chrome extension that exports cookies in Netscape `cookies.txt` format. Avoid extensions that upload cookies to a remote service.
+3. Use the extension on `youtube.com` to export cookies, and save the file as `app/secrets/youtube.cookies.txt` in this repository.
+4. Confirm the file exists at `app/secrets/youtube.cookies.txt`.
+
+If yt-dlp is already installed on the host, this command can do the same export:
+
+```bash
+mkdir -p app/secrets
+yt-dlp --cookies-from-browser chrome --cookies app/secrets/youtube.cookies.txt --skip-download "https://www.youtube.com/"
+```
+
+If the command says Chrome's cookie database is locked, fully quit Chrome and run it again.
+
+Use the browser that has the active YouTube login. For Firefox, replace `chrome` with `firefox`; for a specific Chrome profile, use the yt-dlp browser profile syntax, for example `chrome:Profile 1`.
+
+Then set:
+
+```yaml
+environment:
+  YT_DLP_COOKIES_FILE: /app/secrets/youtube.cookies.txt
+```
+
+Cookies still expire on YouTube's schedule. Keep the host-side `app/secrets/youtube.cookies.txt` refreshed with your browser login, and the container will use the updated file on the next download run. Do not commit cookie files.
 
 ### Polite Timing
 

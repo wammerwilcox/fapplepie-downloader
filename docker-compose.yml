@@ -1,7 +1,7 @@
 services:
   fapplepie-downloader:
-    # Use the pinned beta image from GitHub Container Registry.
-    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.3@sha256:2671902f34e9538a266f62be52c9d9dd4d6ed4f7735f778530d61023383569f1
+    # Use the versioned beta image from GitHub Container Registry.
+    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.4
     # To build locally instead, use docker-compose.dev.yml.
 
     container_name: fapplepie-downloader
@@ -11,6 +11,7 @@ services:
       - ./app/downloads:/app/downloads
       - ./app/logs:/app/logs
       - ./app/cache:/app/cache
+      - ./app/secrets:/app/secrets:ro
 
     # Environment variables
     environment:
@@ -34,6 +35,9 @@ services:
       # Directories
       DOWNLOAD_DIR: /app/downloads
       LOG_DIR: /app/logs
+      YT_DLP_JS_RUNTIMES: "${YT_DLP_JS_RUNTIMES:-deno}"
+      YT_DLP_COOKIES_FILE: "${YT_DLP_COOKIES_FILE:-}"
+      YT_DLP_COOKIES_FROM_BROWSER: "${YT_DLP_COOKIES_FROM_BROWSER:-}"
 
       # Optional outbound proxy for scraper + downloader traffic.
       # Leave values empty to use direct network routing.

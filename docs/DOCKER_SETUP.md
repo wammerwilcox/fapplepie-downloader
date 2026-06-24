@@ -4,7 +4,7 @@
 
 ### Using Docker Compose (Recommended)
 
-1. **Pull and start the pinned release container**:
+1. **Pull and start the versioned release container**:
 
 ```bash
 docker-compose up -d
@@ -64,10 +64,10 @@ Runs the scraper on a schedule inside the container:
 docker-compose up -d
 ```
 
-The default compose file on this branch uses the pinned beta image from GitHub Container Registry:
+The default compose file on this branch uses the versioned beta image from GitHub Container Registry:
 
 ```yaml
-image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.3@sha256:2671902f34e9538a266f62be52c9d9dd4d6ed4f7735f778530d61023383569f1
+image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.4
 ```
 
 ### One-Time Execution Mode
@@ -137,6 +137,54 @@ Notes:
   downloader because aria2c `--all-proxy` does not accept SOCKS proxy format.
 - The direct fallback only affects HTML scraping and fapplepie redirect resolution.
   Downloader proxy handling stays unchanged.
+
+### YouTube Cookies and JavaScript Runtime
+
+Current yt-dlp YouTube extraction needs a JavaScript runtime for signature
+challenges. The Docker image installs Deno and sets:
+
+```yaml
+environment:
+  YT_DLP_JS_RUNTIMES: "deno"
+```
+
+Age-gated YouTube videos also need signed-in cookies. The compose files mount
+`./app/secrets` read-only at `/app/secrets`; place a Netscape-format cookie jar
+there and point yt-dlp at it:
+
+```yaml
+environment:
+  YT_DLP_COOKIES_FILE: /app/secrets/youtube.cookies.txt
+```
+
+To export or refresh cookies from Chrome without installing yt-dlp locally:
+
+1. On the host machine, open Chrome and sign in to YouTube with the account that
+   can view the video.
+2. Install a trusted Chrome extension that exports cookies in Netscape
+   `cookies.txt` format. Avoid extensions that upload cookies to a remote
+   service.
+3. Use the extension on `youtube.com` to export cookies, and save the file as
+   `app/secrets/youtube.cookies.txt` in this repository.
+4. Confirm the file exists at `app/secrets/youtube.cookies.txt`.
+
+If yt-dlp is already installed on the host, this command can do the same export:
+
+```bash
+mkdir -p app/secrets
+yt-dlp --cookies-from-browser chrome \
+  --cookies app/secrets/youtube.cookies.txt \
+  --skip-download "https://www.youtube.com/"
+```
+
+If the command says Chrome's cookie database is locked, fully quit Chrome and
+run it again.
+
+Use the browser that has the active YouTube login. The pinned yt-dlp supports
+`brave`, `chrome`, `chromium`, `edge`, `firefox`, `opera`, `safari`,
+`vivaldi`, and `whale`. For a specific Chrome profile, use the yt-dlp browser
+profile syntax, for example `chrome:Profile 1`. Cookie files are secrets and are
+ignored by Git.
 
 ### Polite Timing
 
@@ -331,10 +379,10 @@ docker-compose up -d
 
 ### Use versioned beta images
 
-The checked-in `docker-compose.yml` uses a pinned GHCR beta image:
+The checked-in `docker-compose.yml` uses a versioned GHCR beta image:
 
 ```yaml
-image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.3@sha256:2671902f34e9538a266f62be52c9d9dd4d6ed4f7735f778530d61023383569f1
+image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.4
 ```
 
 For multi-architecture deployments that should select the platform automatically, use the tag without an architecture-specific digest.
@@ -365,7 +413,7 @@ To run multiple instances with different schedules:
 ```yaml
 services:
   downloader-morning:
-    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.3
+    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.4
     environment:
       CRON_SCHEDULE: "0 6 * * *"
     volumes:
@@ -373,7 +421,7 @@ services:
       - ./logs-morning:/app/logs
 
   downloader-evening:
-    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.3
+    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.4
     environment:
       CRON_SCHEDULE: "0 18 * * *"
     volumes:
@@ -386,5 +434,5 @@ services:
 Beta images are published to GitHub Container Registry:
 
 ```bash
-docker pull ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.3
+docker pull ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.4
 ```
