@@ -417,6 +417,77 @@ def _select_resolved_download_url(source_url: str, response) -> str:
     return final_url
 
 
+def _resolve_download_redirect(
+    session: requests.Session,
+    source_url: str,
+    *,
+    timeout: float,
+    max_attempts: int,
+    backoff_seconds: float,
+    transport_state: ScrapeTransportState,
+    max_redirects: int = 10,
+) -> str:
+    current_url = source_url
+    visited_urls: set[str] = set()
+    last_good_external_url: str | None = None
+
+    for _ in range(max_redirects):
+        if current_url in visited_urls:
+            logger.warning("Redirect loop detected while resolving %s", source_url)
+            return last_good_external_url or current_url
+        visited_urls.add(current_url)
+
+        response = _request_for_scrape(
+            session,
+            current_url,
+            timeout=timeout,
+            allow_redirects=False,
+            max_attempts=max_attempts,
+            backoff_seconds=backoff_seconds,
+            transport_state=transport_state,
+        )
+        response.raise_for_status()
+
+        response_url = getattr(response, "url", None) or current_url
+        if (
+            not _is_fapplepie_host(urlparse(response_url).hostname)
+            and not _is_bad_resolved_download_target(response_url)
+        ):
+            last_good_external_url = response_url
+
+        location = response.headers.get("Location")
+        if not (300 <= response.status_code < 400 and location):
+            if _is_bad_resolved_download_target(response_url):
+                return last_good_external_url or response_url
+            return response_url
+
+        next_url = urljoin(response_url, location)
+        if (
+            not _is_fapplepie_host(urlparse(next_url).hostname)
+            and not _is_bad_resolved_download_target(next_url)
+        ):
+            last_good_external_url = next_url
+
+        if _is_bad_resolved_download_target(next_url):
+            if last_good_external_url:
+                logger.warning(
+                    "Resolved redirect would end at bad target %s; preserving previous target %s",
+                    next_url,
+                    last_good_external_url,
+                )
+                return last_good_external_url
+            return next_url
+
+        current_url = next_url
+
+    logger.warning(
+        "Redirect resolution exceeded %d hops for %s",
+        max_redirects,
+        source_url,
+    )
+    return last_good_external_url or current_url
+
+
 def _ensure_under_base(path_value: str | Path, kind: str) -> Path:
     """Resolve a path and ensure it stays under BASE_DIR."""
     candidate = Path(path_value)
@@ -1168,19 +1239,13 @@ def scrape_videos(base_url, output_file):
                             cached_final_url,
                         )
                     try:
-                        redirect_response = _request_for_scrape(
+                        final_url = _resolve_download_redirect(
                             session,
                             fapplepie_url,
                             timeout=request_timeout,
-                            allow_redirects=True,
                             max_attempts=request_attempts,
                             backoff_seconds=retry_backoff,
                             transport_state=transport_state,
-                        )
-                        redirect_response.raise_for_status()
-                        final_url = _select_resolved_download_url(
-                            fapplepie_url,
-                            redirect_response,
                         )
                         resolved_urls.append(final_url)
                         cache['resolved_urls'][fapplepie_url] = final_url

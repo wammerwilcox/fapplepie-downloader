@@ -643,18 +643,31 @@ class ScraperTransportTests(unittest.TestCase):
             ],
         )
 
-    def test_scrape_videos_preserves_last_good_redirect_before_bad_final_target(self) -> None:
+    def test_scrape_videos_walks_redirects_when_followed_response_hides_intermediate_target(self) -> None:
         first_response = make_response(200, "https://www.fapplepie.com/videos")
         first_response._content = b'<h3><a href="/watch/redtube-login">One</a></h3>'
-        redirect_response = make_response(200, "https://www.redtube.com/login")
-        redtube_redirect = make_response(302, "https://www.fapplepie.com/watch/redtube-login")
-        redtube_redirect.headers["Location"] = "https://www.redtube.com/40157"
-        login_redirect = make_response(302, "https://www.redtube.com/40157")
-        login_redirect.headers["Location"] = "https://www.redtube.com/login"
-        redirect_response.history = [redtube_redirect, login_redirect]
+        followed_response = make_response(200, "https://www.redtube.com/login")
+        fapplepie_redirect = make_response(
+            302,
+            "https://www.fapplepie.com/watch/redtube-login",
+        )
+        fapplepie_redirect.headers["Location"] = "https://www.redtube.com/40157"
+        redtube_login_redirect = make_response(302, "https://www.redtube.com/40157")
+        redtube_login_redirect.headers["Location"] = "https://www.redtube.com/login"
         session = Mock()
         session.headers = {"User-Agent": "test-agent"}
         cache = {"resolved_urls": {}, "downloaded_urls": []}
+
+        def request_for_scrape(*args, **kwargs):
+            url = args[1]
+            if kwargs["allow_redirects"]:
+                self.assertEqual(url, "https://www.fapplepie.com/watch/redtube-login")
+                return followed_response
+            if url == "https://www.fapplepie.com/watch/redtube-login":
+                return fapplepie_redirect
+            if url == "https://www.redtube.com/40157":
+                return redtube_login_redirect
+            self.fail(f"unexpected redirect request: {url}")
 
         with TemporaryDirectory() as tmp_dir:
             base_dir = Path(tmp_dir)
@@ -683,7 +696,7 @@ class ScraperTransportTests(unittest.TestCase):
                                     with patch.object(
                                         scraper,
                                         "_request_for_scrape",
-                                        return_value=redirect_response,
+                                        side_effect=request_for_scrape,
                                     ):
                                         scraper.scrape_videos(
                                             "https://www.fapplepie.com/videos",
