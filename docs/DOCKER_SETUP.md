@@ -67,7 +67,7 @@ docker-compose up -d
 The default compose file on this branch uses the versioned beta image from GitHub Container Registry:
 
 ```yaml
-image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.6
+image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.7
 ```
 
 ### One-Time Execution Mode
@@ -388,7 +388,7 @@ docker-compose up -d
 The checked-in `docker-compose.yml` uses a versioned GHCR beta image:
 
 ```yaml
-image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.6
+image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.7
 ```
 
 For multi-architecture deployments that should select the platform automatically, use the tag without an architecture-specific digest.
@@ -419,7 +419,7 @@ To run multiple instances with different schedules:
 ```yaml
 services:
   downloader-morning:
-    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.6
+    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.7
     environment:
       CRON_SCHEDULE: "0 6 * * *"
     volumes:
@@ -427,7 +427,7 @@ services:
       - ./logs-morning:/app/logs
 
   downloader-evening:
-    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.6
+    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.7
     environment:
       CRON_SCHEDULE: "0 18 * * *"
     volumes:
@@ -440,5 +440,5 @@ services:
 Beta images are published to GitHub Container Registry:
 
 ```bash
-docker pull ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.6
+docker pull ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.7
 ```
