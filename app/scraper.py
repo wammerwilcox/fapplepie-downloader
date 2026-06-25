@@ -15,7 +15,7 @@ import time
 import logging
 import shutil
 import random
-from urllib.parse import quote, urlparse, urlunparse
+from urllib.parse import quote, urljoin, urlparse, urlunparse
 from urllib.robotparser import RobotFileParser
 from dataclasses import dataclass
 from functools import lru_cache
@@ -365,7 +365,56 @@ def _is_stale_resolved_url(source_url: str, resolved_url: str | None) -> bool:
         return True
     if resolved_url == source_url:
         return True
+    if _is_bad_resolved_download_target(resolved_url):
+        return True
     return _is_fapplepie_host(urlparse(resolved_url).hostname)
+
+
+def _is_bad_resolved_download_target(url: str | None) -> bool:
+    if not url:
+        return True
+    parsed = urlparse(url)
+    path = parsed.path or "/"
+    normalized_path = path.rstrip("/").lower() or "/"
+    if normalized_path == "/":
+        return True
+
+    last_segment = normalized_path.rsplit("/", 1)[-1]
+    return last_segment in {"login", "signin", "sign-in"}
+
+
+def _iter_redirect_chain_urls(response) -> list[str]:
+    urls: list[str] = []
+    for redirect_response in getattr(response, "history", []) or []:
+        if getattr(redirect_response, "url", None):
+            urls.append(redirect_response.url)
+        location = redirect_response.headers.get("Location")
+        if location:
+            urls.append(urljoin(redirect_response.url, location))
+    if getattr(response, "url", None):
+        urls.append(response.url)
+    return urls
+
+
+def _select_resolved_download_url(source_url: str, response) -> str:
+    final_url = response.url
+    if not _is_bad_resolved_download_target(final_url):
+        return final_url
+
+    for candidate in reversed(_iter_redirect_chain_urls(response)[:-1]):
+        if candidate == source_url:
+            continue
+        if _is_fapplepie_host(urlparse(candidate).hostname):
+            continue
+        if not _is_bad_resolved_download_target(candidate):
+            logger.warning(
+                "Resolved redirect ended at bad target %s; preserving previous target %s",
+                final_url,
+                candidate,
+            )
+            return candidate
+
+    return final_url
 
 
 def _ensure_under_base(path_value: str | Path, kind: str) -> Path:
@@ -1129,7 +1178,10 @@ def scrape_videos(base_url, output_file):
                             transport_state=transport_state,
                         )
                         redirect_response.raise_for_status()
-                        final_url = redirect_response.url
+                        final_url = _select_resolved_download_url(
+                            fapplepie_url,
+                            redirect_response,
+                        )
                         resolved_urls.append(final_url)
                         cache['resolved_urls'][fapplepie_url] = final_url
                         resolved_via_network = True

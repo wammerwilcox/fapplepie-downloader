@@ -643,6 +643,61 @@ class ScraperTransportTests(unittest.TestCase):
             ],
         )
 
+    def test_scrape_videos_preserves_last_good_redirect_before_bad_final_target(self) -> None:
+        first_response = make_response(200, "https://www.fapplepie.com/videos")
+        first_response._content = b'<h3><a href="/watch/redtube-login">One</a></h3>'
+        redirect_response = make_response(200, "https://www.redtube.com/login")
+        redtube_redirect = make_response(302, "https://www.fapplepie.com/watch/redtube-login")
+        redtube_redirect.headers["Location"] = "https://www.redtube.com/40157"
+        login_redirect = make_response(302, "https://www.redtube.com/40157")
+        login_redirect.headers["Location"] = "https://www.redtube.com/login"
+        redirect_response.history = [redtube_redirect, login_redirect]
+        session = Mock()
+        session.headers = {"User-Agent": "test-agent"}
+        cache = {"resolved_urls": {}, "downloaded_urls": []}
+
+        with TemporaryDirectory() as tmp_dir:
+            base_dir = Path(tmp_dir)
+            output_path = base_dir / "video_urls.txt"
+            with patch.object(scraper, "BASE_DIR", base_dir):
+                with patch.object(scraper, "load_cache_locked", return_value=cache):
+                    with patch.object(scraper, "save_cache_locked"):
+                        with patch.object(
+                            scraper,
+                            "_build_scrape_session",
+                            return_value=nullcontext(session),
+                        ):
+                            with patch.object(
+                                scraper,
+                                "_resolve_working_base_url",
+                                return_value=(
+                                    "https://www.fapplepie.com/videos",
+                                    first_response,
+                                ),
+                            ):
+                                with patch.object(
+                                    scraper,
+                                    "_fetch_robots_txt",
+                                    return_value=None,
+                                ):
+                                    with patch.object(
+                                        scraper,
+                                        "_request_for_scrape",
+                                        return_value=redirect_response,
+                                    ):
+                                        scraper.scrape_videos(
+                                            "https://www.fapplepie.com/videos",
+                                            "video_urls.txt",
+                                        )
+
+            written_urls = output_path.read_text().splitlines()
+
+        self.assertEqual(written_urls, ["https://www.redtube.com/40157"])
+        self.assertEqual(
+            cache["resolved_urls"]["https://www.fapplepie.com/watch/redtube-login"],
+            "https://www.redtube.com/40157",
+        )
+
     def test_request_retries_non_http_failures(self) -> None:
         session = Mock()
         session.get.side_effect = [
@@ -739,6 +794,20 @@ class ScraperTransportTests(unittest.TestCase):
             scraper._is_stale_resolved_url(
                 "https://fapplepie.com/watch/1vjEwGAb",
                 "https://www.eporner.com/video-abc/example/",
+            )
+        )
+
+    def test_stale_resolved_url_detection_flags_bad_login_and_root_targets(self) -> None:
+        self.assertTrue(
+            scraper._is_stale_resolved_url(
+                "https://fapplepie.com/watch/JvzZJXvG",
+                "https://www.redtube.com/login",
+            )
+        )
+        self.assertTrue(
+            scraper._is_stale_resolved_url(
+                "https://fapplepie.com/watch/gV5OjMAd",
+                "https://www.pornhub.com/",
             )
         )
 
