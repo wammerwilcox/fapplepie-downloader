@@ -35,7 +35,7 @@ docker compose down
 ```
 
 The default compose file uses the versioned beta image from GitHub Container Registry:
-`ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.7`. Runtime state is written under `app/cache/`, `app/downloads/`, and `app/logs/`; those paths are ignored by Git.
+`ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.8`. Runtime state is written under `app/cache/`, `app/downloads/`, and `app/logs/`; those paths are ignored by Git.
 
 For local image development, use:
 
