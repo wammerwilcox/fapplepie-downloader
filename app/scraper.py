@@ -1338,6 +1338,11 @@ def download_videos(urls_file='video_urls.txt', output_dir='downloads'):
                 if target_proxy_url
                 else ""
             )
+            logger.info(
+                "Download proxy decision: host=%s proxied=%s",
+                urlparse(url).hostname,
+                bool(target_proxy_url),
+            )
             use_aria2_for_url = True
 
             # aria2c's --all-proxy only accepts HTTP proxy format, not SOCKS.

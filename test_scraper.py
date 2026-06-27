@@ -901,6 +901,58 @@ class ScraperTransportTests(unittest.TestCase):
             scraper._get_proxy_settings.cache_clear()
             scraper._get_proxy_scope.cache_clear()
 
+    def test_download_videos_uses_selected_proxy_for_url_file_entry(self) -> None:
+        scraper._get_proxy_settings.cache_clear()
+        scraper._get_proxy_scope.cache_clear()
+        url = "https://www.pornhub.com/view_video.php?viewkey=ph5b4a3c40922a9"
+        with TemporaryDirectory() as tmp_dir:
+            base_dir = Path(tmp_dir)
+            urls_file = base_dir / "video_urls.txt"
+            output_dir = base_dir / "downloads"
+            urls_file.write_text(url + "\n")
+
+            with patch.object(scraper, "BASE_DIR", base_dir):
+                with patch.object(scraper, "load_cache_locked", return_value={"downloaded_urls": []}):
+                    with patch.object(scraper, "save_cache_locked"):
+                        with patch.object(scraper, "_resolve_executable") as resolve_executable:
+                            resolve_executable.side_effect = [
+                                "/venv/bin/yt-dlp",
+                                "/usr/bin/aria2c",
+                            ]
+                            with patch.object(scraper, "_log_binary_version"):
+                                with patch.object(scraper, "_running_in_docker", return_value=True):
+                                    with patch.object(
+                                        scraper.subprocess,
+                                        "run",
+                                        return_value=subprocess.CompletedProcess(
+                                            args=[],
+                                            returncode=0,
+                                            stdout="",
+                                            stderr="",
+                                        ),
+                                    ) as run:
+                                        with patch.dict(
+                                            "os.environ",
+                                            {
+                                                "NORDVPN_PROXY": "socks5h://proxy.example:1080",
+                                                "NORDVPN_PROXY_SCOPE": "fapplepie",
+                                                "NORDVPN_PROXY_DOWNLOAD_DOMAINS": "pornhub.com",
+                                            },
+                                            clear=False,
+                                        ):
+                                            scraper.download_videos(
+                                                "video_urls.txt",
+                                                str(output_dir),
+                                            )
+
+        cmd = run.call_args.args[0]
+        self.assertIn("--proxy", cmd)
+        self.assertIn("socks5h://proxy.example:1080", cmd)
+        self.assertNotIn("--external-downloader", cmd)
+        self.assertEqual(cmd[-1], url)
+        scraper._get_proxy_settings.cache_clear()
+        scraper._get_proxy_scope.cache_clear()
+
     def test_build_yt_dlp_command_includes_cookie_file_and_js_runtime(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             cookie_file = Path(tmp_dir) / "youtube.cookies.txt"
