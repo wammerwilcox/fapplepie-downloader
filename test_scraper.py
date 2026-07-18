@@ -125,6 +125,47 @@ class ScraperTransportTests(unittest.TestCase):
         self.assertEqual(session.get.call_count, 2)
         sleep_mock.assert_called_once_with(0.5)
 
+    def test_direct_connection_error_does_not_trigger_a_duplicate_fallback(self) -> None:
+        session = Mock()
+        session.get.side_effect = requests.ConnectionError("upstream closed connection")
+
+        with patch.object(scraper, "_proxy_url_for_target", return_value=None):
+            with self.assertLogs(scraper.logger, level="ERROR") as logs:
+                with self.assertRaises(requests.ConnectionError):
+                    scraper._request_for_scrape(
+                        session,
+                        "https://fapplepie.com/videos",
+                        max_attempts=1,
+                    )
+
+        self.assertEqual(session.get.call_count, 1)
+        self.assertIn("direct network route", "\n".join(logs.output))
+
+    def test_proxied_connection_error_retries_direct_and_pins_transport(self) -> None:
+        session = Mock()
+        session.get.side_effect = [
+            requests.ConnectionError("proxy connection failed"),
+            make_response(200, "https://fapplepie.com/videos"),
+        ]
+        transport_state = scraper.ScrapeTransportState()
+
+        with patch.object(
+            scraper,
+            "_proxy_url_for_target",
+            return_value="socks5h://proxy.example:1080",
+        ):
+            response = scraper._request_for_scrape(
+                session,
+                "https://fapplepie.com/videos",
+                max_attempts=1,
+                transport_state=transport_state,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(transport_state.mode, scraper.SCRAPE_TRANSPORT_DIRECT)
+        self.assertIsNotNone(session.get.call_args_list[0].kwargs["proxies"])
+        self.assertIsNone(session.get.call_args_list[1].kwargs["proxies"])
+
     @unittest.skipIf(scraper.curl_requests is None, "curl_cffi is not installed")
     def test_request_retries_curl_cffi_failures(self) -> None:
         session = Mock()
