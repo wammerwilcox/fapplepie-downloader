@@ -468,10 +468,12 @@ def _request_for_scrape(
     )
 
     response = None
-    initial_proxied = False
+    initial_proxied = _transport_proxies_for_request(
+        url,
+        initial_transport_mode,
+    )[1]
     fallback_allowed = _scrape_direct_fallback_enabled()
-    proxy_failed = False
-    proxy_error: BaseException | None = None
+    proxied_request_failed = False
 
     try:
         response = _request_with_retries(
@@ -483,15 +485,20 @@ def _request_for_scrape(
             backoff_seconds=backoff_seconds,
             transport_mode=initial_transport_mode,
         )
-        initial_proxied = getattr(response, "codex_proxied", False)
+        initial_proxied = getattr(response, "codex_proxied", initial_proxied)
     except SCRAPE_REQUEST_EXCEPTIONS as exc:
-        proxy_failed = True
-        proxy_error = exc
+        proxied_request_failed = initial_proxied
         if not (
             is_fapplepie_request
+            and initial_proxied
             and initial_transport_mode == SCRAPE_TRANSPORT_CONFIGURED
             and fallback_allowed
         ):
+            if is_fapplepie_request and not initial_proxied:
+                logger.error(
+                    "Fapplepie upstream request failed via direct network route: %s",
+                    exc,
+                )
             raise
         logger.warning(
             "Fapplepie request via proxy failed: %s; retrying direct: %s",
@@ -508,7 +515,14 @@ def _request_for_scrape(
         )
 
     should_retry_direct = (
-        (proxy_failed or (response is not None and response.status_code == 403))
+        (
+            proxied_request_failed
+            or (
+                response is not None
+                and response.status_code == 403
+                and initial_proxied
+            )
+        )
         and is_fapplepie_request
         and initial_transport_mode == SCRAPE_TRANSPORT_CONFIGURED
         and fallback_allowed

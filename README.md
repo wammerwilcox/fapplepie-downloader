@@ -105,7 +105,7 @@ Additional proxy controls:
 
 - `NORDVPN_PROXY_SCOPE=fapplepie` proxies only fapplepie traffic.
 - `NORDVPN_PROXY_SCOPE=all` proxies all scraper/downloader traffic.
-- `SCRAPE_DIRECT_FALLBACK_ON_403=1` retries scraper requests directly after proxied HTTP 403 responses.
+- `SCRAPE_DIRECT_FALLBACK_ON_403=1` retries Fapplepie scraper requests directly after a proxied HTTP 403 response or a proxied connection failure. Direct failures are reported as upstream failures and are not redundantly retried.
 
 ## Dependency Locking
 

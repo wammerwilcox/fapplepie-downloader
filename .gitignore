@@ -107,6 +107,7 @@ coverage.xml
 *.py.cover
 .hypothesis/
 .pytest_cache/
+.pip-tools-cache/
 cover/
 
 # Translations
@@ -266,6 +267,14 @@ tempCodeRunnerFile.py
 
 # PyPI configuration file
 .pypirc
+
+# Fapplepie runtime state and secrets
+app/cache/
+app/downloads/
+app/logs/
+app/secrets/
+app/video_urls.txt
+*.cookies.txt
 
 # Marimo
 marimo/_static/
