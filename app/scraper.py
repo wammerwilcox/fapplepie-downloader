@@ -13,6 +13,7 @@ from pathlib import Path
 import tempfile
 import time
 import logging
+import re
 import shutil
 import random
 from urllib.parse import quote, urljoin, urlparse, urlunparse
@@ -67,6 +68,10 @@ DEFAULT_SCRAPE_HEADERS = {
     "Upgrade-Insecure-Requests": "1",
     "Connection": "keep-alive",
 }
+URL_CREDENTIALS_PATTERN = re.compile(
+    r"(?P<scheme>[a-z][a-z0-9+.-]*://)[^/@\s]+@",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -106,18 +111,16 @@ class ProbeResult:
 
 
 def _redact_proxy_url(proxy_url: str) -> str:
-    """Hide proxy password in logs while keeping host/port visible."""
-    parsed = urlparse(proxy_url)
-    if parsed.password is None:
-        return proxy_url
+    """Hide proxy user information while keeping host and port visible."""
+    return _redact_sensitive_text(proxy_url)
 
-    host = parsed.hostname or ""
-    if ":" in host and not host.startswith("["):
-        host = f"[{host}]"
-    port = f":{parsed.port}" if parsed.port else ""
-    username = parsed.username or ""
-    redacted_netloc = f"{username}:***@{host}{port}"
-    return urlunparse(parsed._replace(netloc=redacted_netloc))
+
+def _redact_sensitive_text(value: object) -> str:
+    """Remove credentials embedded in URLs before writing text to logs."""
+    return URL_CREDENTIALS_PATTERN.sub(
+        lambda match: f"{match.group('scheme')}***:***@",
+        str(value),
+    )
 
 
 def _normalize_proxy_url(proxy_raw: str) -> str:
@@ -133,7 +136,10 @@ def _inject_proxy_credentials(proxy_url: str, username: str, password: str) -> s
     parsed = urlparse(proxy_url)
     host = parsed.hostname
     if not host:
-        raise ValueError(f"Invalid NORDVPN_PROXY value: {proxy_url}")
+        raise ValueError(
+            "Invalid NORDVPN_PROXY value: "
+            f"{_redact_sensitive_text(proxy_url)}"
+        )
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
     port = f":{parsed.port}" if parsed.port else ""
@@ -263,7 +269,7 @@ def _log_proxy_self_check() -> None:
         "Proxy self-check: scope=%s fapplepie=%s sample(%s)=%s",
         scope,
         fapplepie_mode,
-        sample_probe,
+        _redact_sensitive_text(sample_probe),
         sample_mode,
     )
 
@@ -312,6 +318,26 @@ def _sleep_with_jitter(
     time.sleep(sleep_seconds)
 
 
+def _is_http2_protocol_error(exc: BaseException) -> bool:
+    """Return whether curl reported HTTP/2 PROTOCOL_ERROR (error code 92)."""
+    return (
+        getattr(exc, "code", None) == 92
+        and "PROTOCOL_ERROR" in str(exc).upper()
+    )
+
+
+def _scrape_request_kwargs(
+    session,
+    url: str,
+    *,
+    force_http11: bool,
+) -> dict:
+    kwargs = _request_impersonation_kwargs(session, url)
+    if force_http11 and kwargs:
+        kwargs["http_version"] = "v1"
+    return kwargs
+
+
 def _transport_proxies_for_request(
     url: str,
     transport_mode: str,
@@ -353,7 +379,7 @@ def _format_probe_failure(candidate: str, response) -> str:
     final_proxied = getattr(response, "codex_proxied", initial_proxied)
     fallback_attempted = getattr(response, "codex_fallback_attempted", False)
     return (
-        f"{candidate} -> status={response.status_code} "
+        f"{_redact_sensitive_text(candidate)} -> status={response.status_code} "
         f"initial_transport={initial_transport} initial_proxied={initial_proxied} "
         f"final_transport={final_transport} final_proxied={final_proxied} "
         f"fallback_attempted={fallback_attempted}"
@@ -638,12 +664,18 @@ def _fetch_robots_txt(
             transport_state=transport_state,
         )
         if response.status_code == 404:
-            logger.info("robots.txt not found at %s; continuing", robots_url)
+            logger.info(
+                "robots.txt not found at %s; continuing",
+                _redact_sensitive_text(robots_url),
+            )
             return None
         response.raise_for_status()
         return response.text
     except Exception as exc:
-        logger.info("Unable to fetch robots.txt (%s); continuing", exc)
+        logger.info(
+            "Unable to fetch robots.txt (%s); continuing",
+            _redact_sensitive_text(exc),
+        )
         return None
 
 
@@ -660,11 +692,13 @@ def _request_with_retries(
     """Issue a GET request with simple retries and linear backoff."""
     request_proxies, proxied = _transport_proxies_for_request(url, transport_mode)
     last_error = None
+    force_http11 = False
+    is_fapplepie_request = _is_fapplepie_host(urlparse(url).hostname)
     for attempt in range(1, max_attempts + 1):
         try:
             logger.info(
                 "HTTP GET %s via transport=%s proxied=%s attempt=%d/%d",
-                url,
+                _redact_sensitive_text(url),
                 transport_mode,
                 proxied,
                 attempt,
@@ -676,12 +710,45 @@ def _request_with_retries(
                 timeout=timeout,
                 allow_redirects=allow_redirects,
                 proxies=request_proxies,
-                **_request_impersonation_kwargs(session, url),
+                **_scrape_request_kwargs(
+                    session,
+                    url,
+                    force_http11=force_http11,
+                ),
             )
             response.codex_transport_mode = transport_mode
             response.codex_proxied = proxied
             return response
         except SCRAPE_REQUEST_EXCEPTIONS as exc:
+            if (
+                not force_http11
+                and is_fapplepie_request
+                and _request_impersonation_kwargs(session, url)
+                and _is_http2_protocol_error(exc)
+            ):
+                force_http11 = True
+                logger.warning(
+                    "Fapplepie HTTP/2 request failed with PROTOCOL_ERROR; "
+                    "retrying the same route with HTTP/1.1"
+                )
+                try:
+                    response = session.get(
+                        url,
+                        headers=headers,
+                        timeout=timeout,
+                        allow_redirects=allow_redirects,
+                        proxies=request_proxies,
+                        **_scrape_request_kwargs(
+                            session,
+                            url,
+                            force_http11=True,
+                        ),
+                    )
+                    response.codex_transport_mode = transport_mode
+                    response.codex_proxied = proxied
+                    return response
+                except SCRAPE_REQUEST_EXCEPTIONS as fallback_exc:
+                    exc = fallback_exc
             last_error = exc
             if attempt < max_attempts:
                 sleep_seconds = backoff_seconds * attempt
@@ -691,7 +758,7 @@ def _request_with_retries(
                     max_attempts,
                     transport_mode,
                     proxied,
-                    exc,
+                    _redact_sensitive_text(exc),
                     sleep_seconds,
                 )
                 time.sleep(sleep_seconds)
@@ -702,7 +769,7 @@ def _request_with_retries(
                     max_attempts,
                     transport_mode,
                     proxied,
-                    exc,
+                    _redact_sensitive_text(exc),
                 )
     raise last_error
 
@@ -750,8 +817,8 @@ def _request_for_scrape(
             raise
         logger.warning(
             "Fapplepie request via proxy failed: %s; retrying direct: %s",
-            exc,
-            url,
+            _redact_sensitive_text(exc),
+            _redact_sensitive_text(url),
         )
 
     if response is not None:
@@ -777,7 +844,7 @@ def _request_for_scrape(
             ):
                 logger.warning(
                     "Fapplepie request via proxy failed and direct fallback is disabled: %s",
-                    url,
+                    _redact_sensitive_text(url),
                 )
             return response
         if (
@@ -789,13 +856,13 @@ def _request_for_scrape(
         ):
             logger.warning(
                 "Fapplepie request returned 403 via proxy and direct fallback is disabled: %s",
-                url,
+                _redact_sensitive_text(url),
             )
         return response
 
     logger.warning(
         "Fapplepie request via proxy failed; retrying direct: %s",
-        url,
+        _redact_sensitive_text(url),
     )
     direct_response = _request_with_retries(
         session,
@@ -815,12 +882,15 @@ def _request_for_scrape(
 
     if direct_response.ok:
         transport_state.mode = SCRAPE_TRANSPORT_DIRECT
-        logger.warning("Pinned direct scrape transport after proxied 403: %s", url)
+        logger.warning(
+            "Pinned direct scrape transport after proxied 403: %s",
+            _redact_sensitive_text(url),
+        )
     else:
         logger.warning(
             "Direct scrape fallback failed with status %s: %s",
             direct_response.status_code,
-            url,
+            _redact_sensitive_text(url),
         )
     return direct_response
 
@@ -855,7 +925,7 @@ def _resolve_working_base_url(
     """
     failures: list[str] = []
     for candidate in _candidate_base_urls(base_url):
-        logger.info("Probing base URL: %s", candidate)
+        logger.info("Probing base URL: %s", _redact_sensitive_text(candidate))
         try:
             response = _request_for_scrape(
                 session,
@@ -874,13 +944,19 @@ def _resolve_working_base_url(
             if candidate != base_url:
                 logger.warning(
                     "Using fallback base URL %s (original %s)",
-                    candidate,
-                    base_url,
+                    _redact_sensitive_text(candidate),
+                    _redact_sensitive_text(base_url),
                 )
             return candidate, response
         except SCRAPE_REQUEST_EXCEPTIONS as exc:
-            failures.append(f"{candidate} -> {exc}")
-            logger.warning("Base URL probe failed: %s", exc)
+            failures.append(
+                f"{_redact_sensitive_text(candidate)} -> "
+                f"{_redact_sensitive_text(exc)}"
+            )
+            logger.warning(
+                "Base URL probe failed: %s",
+                _redact_sensitive_text(exc),
+            )
 
     details = " | ".join(failures)
     raise requests.RequestException(
@@ -907,7 +983,7 @@ def _robots_disallow(
         logger.warning(
             "robots.txt disallows user-agent '%s' for %s",
             user_agent,
-            target_url,
+            _redact_sensitive_text(target_url),
         )
     return not is_allowed
 
@@ -1235,8 +1311,8 @@ def scrape_videos(base_url, output_file):
                     if cached_final_url:
                         logger.info(
                             "Refreshing stale cached resolved URL: %s -> %s",
-                            fapplepie_url,
-                            cached_final_url,
+                            _redact_sensitive_text(fapplepie_url),
+                            _redact_sensitive_text(cached_final_url),
                         )
                     try:
                         final_url = _resolve_download_redirect(
