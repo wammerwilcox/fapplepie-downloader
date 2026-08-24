@@ -35,7 +35,7 @@ docker compose down
 ```
 
 The default compose file uses the versioned beta image from GitHub Container Registry:
-`ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.9`. Runtime state is written under `app/cache/`, `app/downloads/`, and `app/logs/`; those paths are ignored by Git.
+`ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.10`. Runtime state is written under `app/cache/`, `app/downloads/`, and `app/logs/`; those paths are ignored by Git.
 
 For local image development, use:
 
@@ -106,10 +106,14 @@ environment:
 
 Additional proxy controls:
 
+- `NORDVPN_PROXY_POOL=proxy-a:1080,proxy-b:1080` selects one proxy at random when the process starts and keeps it for that run. When set, it takes precedence over `NORDVPN_PROXY`.
 - `NORDVPN_PROXY_SCOPE=fapplepie` proxies only fapplepie traffic.
 - `NORDVPN_PROXY_SCOPE=all` proxies all scraper/downloader traffic.
 - `NORDVPN_PROXY_DOWNLOAD_DOMAINS=xhamster.com` proxies downloads from selected domains and subdomains while leaving other downloads direct.
 - `SCRAPE_DIRECT_FALLBACK_ON_403=1` retries scraper requests directly after proxied HTTP 403 responses.
+
+Fapplepie HTML requests use HTTP/1.1 with the browser impersonation profile.
+Downloader requests keep their existing transport behavior.
 
 Use probe mode to validate the scraper fetch/parse/redirect path without writing URL/cache state or downloading.
 
