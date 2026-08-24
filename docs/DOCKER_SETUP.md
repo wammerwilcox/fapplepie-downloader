@@ -97,6 +97,7 @@ environment:
   CRON_SCHEDULE: "0 2 * * *" # Daily at 2 AM
   # Optional: route scraper/download traffic via NordVPN SOCKS proxy
   # NORDVPN_PROXY: "socks5h://nl.socks.nordhold.net:1080"
+  # NORDVPN_PROXY_POOL: "proxy-a.example:1080,proxy-b.example:1080"
   # NORDVPN_USER: "${NORDVPN_USER}" # NordVPN service username
   # NORDVPN_PASS: "${NORDVPN_PASS}" # NordVPN service password
   # SCRAPE_DIRECT_FALLBACK_ON_403: "1" # Retry scrape requests directly if proxied fapplepie requests get HTTP 403
@@ -124,7 +125,11 @@ docker run \
 
 Notes:
 
-- If `NORDVPN_PROXY` is unset, the container uses direct network routing.
+- `NORDVPN_PROXY_POOL` accepts a comma-separated list and randomly selects one
+  proxy when the process starts. The selected proxy stays fixed for that run,
+  and the pool takes precedence over `NORDVPN_PROXY`.
+- If neither `NORDVPN_PROXY_POOL` nor `NORDVPN_PROXY` is set, the container uses
+  direct network routing.
 - `NORDVPN_PROXY_SCOPE`:
   - `fapplepie` (default): proxy only `fapplepie.com` traffic
   - `all`: proxy all outbound traffic
@@ -142,6 +147,8 @@ Notes:
 - The direct fallback only affects HTML scraping and fapplepie redirect resolution.
   Downloader proxy handling is controlled by `NORDVPN_PROXY_SCOPE` and
   `NORDVPN_PROXY_DOWNLOAD_DOMAINS`.
+- Fapplepie HTML requests use HTTP/1.1 with browser impersonation. Downloader
+  requests retain their existing transport behavior.
 
 ### YouTube Cookies and JavaScript Runtime
 

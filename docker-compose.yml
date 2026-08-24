@@ -43,9 +43,11 @@ services:
       # Leave values empty to use direct network routing.
       # Example:
       #   NORDVPN_PROXY=socks5h://nl.socks.nordhold.net:1080
+      #   NORDVPN_PROXY_POOL=proxy-a.example:1080,proxy-b.example:1080
       #   NORDVPN_USER=<service username>
       #   NORDVPN_PASS=<service password>
       NORDVPN_PROXY: "${NORDVPN_PROXY:-}"
+      NORDVPN_PROXY_POOL: "${NORDVPN_PROXY_POOL:-}"
       NORDVPN_USER: "${NORDVPN_USER:-}"
       NORDVPN_PASS: "${NORDVPN_PASS:-}"
       NORDVPN_PROXY_DOWNLOAD_DOMAINS: "${NORDVPN_PROXY_DOWNLOAD_DOMAINS:-}"

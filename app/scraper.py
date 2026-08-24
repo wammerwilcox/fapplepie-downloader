@@ -68,6 +68,20 @@ DEFAULT_SCRAPE_HEADERS = {
     "Upgrade-Insecure-Requests": "1",
     "Connection": "keep-alive",
 }
+FAPPLEPIE_HTTP11_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/139.0.0.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,*/*;q=0.8"
+    ),
+    "Accept-Language": "en-GB,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Upgrade-Insecure-Requests": "1",
+}
 URL_CREDENTIALS_PATTERN = re.compile(
     r"(?P<scheme>[a-z][a-z0-9+.-]*://)[^/@\s]+@",
     re.IGNORECASE,
@@ -151,12 +165,21 @@ def _inject_proxy_credentials(proxy_url: str, username: str, password: str) -> s
 def _get_proxy_settings() -> tuple[str | None, dict | None]:
     """
     Build optional proxy config from environment.
-    If NORDVPN_PROXY is unset, return no proxy.
+    A configured pool takes precedence and selects one sticky proxy per process.
     """
-    proxy_raw = os.environ.get("NORDVPN_PROXY", "").strip()
+    proxy_pool = [
+        candidate.strip()
+        for candidate in os.environ.get("NORDVPN_PROXY_POOL", "").split(",")
+        if candidate.strip()
+    ]
+    proxy_raw = (
+        random.choice(proxy_pool)
+        if proxy_pool
+        else os.environ.get("NORDVPN_PROXY", "").strip()
+    )
     if not proxy_raw:
         logger.info(
-            "No outbound proxy configured (NORDVPN_PROXY unset); using direct network routing."
+            "No outbound proxy configured; using direct network routing."
         )
         return None, None
 
@@ -318,24 +341,47 @@ def _sleep_with_jitter(
     time.sleep(sleep_seconds)
 
 
-def _is_http2_protocol_error(exc: BaseException) -> bool:
-    """Return whether curl reported HTTP/2 PROTOCOL_ERROR (error code 92)."""
-    return (
-        getattr(exc, "code", None) == 92
-        and "PROTOCOL_ERROR" in str(exc).upper()
-    )
+def _scrape_request_kwargs(session, url: str) -> dict:
+    kwargs = _request_impersonation_kwargs(session, url)
+    if kwargs and _is_fapplepie_host(urlparse(url).hostname):
+        kwargs["http_version"] = "v1"
+    return kwargs
 
 
-def _scrape_request_kwargs(
+def _scrape_session_get(
     session,
     url: str,
     *,
-    force_http11: bool,
-) -> dict:
-    kwargs = _request_impersonation_kwargs(session, url)
-    if force_http11 and kwargs:
-        kwargs["http_version"] = "v1"
-    return kwargs
+    headers: dict | None,
+    timeout: float,
+    allow_redirects: bool,
+    proxies: dict | None,
+):
+    original_headers = None
+    request_headers = headers
+    if _is_fapplepie_host(urlparse(url).hostname):
+        try:
+            original_headers = dict(session.headers)
+        except (AttributeError, TypeError):
+            request_headers = FAPPLEPIE_HTTP11_HEADERS
+        else:
+            session.headers.clear()
+            session.headers.update(FAPPLEPIE_HTTP11_HEADERS)
+            request_headers = None
+
+    try:
+        return session.get(
+            url,
+            headers=request_headers,
+            timeout=timeout,
+            allow_redirects=allow_redirects,
+            proxies=proxies,
+            **_scrape_request_kwargs(session, url),
+        )
+    finally:
+        if original_headers is not None:
+            session.headers.clear()
+            session.headers.update(original_headers)
 
 
 def _transport_proxies_for_request(
@@ -692,8 +738,6 @@ def _request_with_retries(
     """Issue a GET request with simple retries and linear backoff."""
     request_proxies, proxied = _transport_proxies_for_request(url, transport_mode)
     last_error = None
-    force_http11 = False
-    is_fapplepie_request = _is_fapplepie_host(urlparse(url).hostname)
     for attempt in range(1, max_attempts + 1):
         try:
             logger.info(
@@ -704,51 +748,18 @@ def _request_with_retries(
                 attempt,
                 max_attempts,
             )
-            response = session.get(
+            response = _scrape_session_get(
+                session,
                 url,
                 headers=headers,
                 timeout=timeout,
                 allow_redirects=allow_redirects,
                 proxies=request_proxies,
-                **_scrape_request_kwargs(
-                    session,
-                    url,
-                    force_http11=force_http11,
-                ),
             )
             response.codex_transport_mode = transport_mode
             response.codex_proxied = proxied
             return response
         except SCRAPE_REQUEST_EXCEPTIONS as exc:
-            if (
-                not force_http11
-                and is_fapplepie_request
-                and _request_impersonation_kwargs(session, url)
-                and _is_http2_protocol_error(exc)
-            ):
-                force_http11 = True
-                logger.warning(
-                    "Fapplepie HTTP/2 request failed with PROTOCOL_ERROR; "
-                    "retrying the same route with HTTP/1.1"
-                )
-                try:
-                    response = session.get(
-                        url,
-                        headers=headers,
-                        timeout=timeout,
-                        allow_redirects=allow_redirects,
-                        proxies=request_proxies,
-                        **_scrape_request_kwargs(
-                            session,
-                            url,
-                            force_http11=True,
-                        ),
-                    )
-                    response.codex_transport_mode = transport_mode
-                    response.codex_proxied = proxied
-                    return response
-                except SCRAPE_REQUEST_EXCEPTIONS as fallback_exc:
-                    exc = fallback_exc
             last_error = exc
             if attempt < max_attempts:
                 sleep_seconds = backoff_seconds * attempt
