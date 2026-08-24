@@ -30,7 +30,7 @@ jobs:
         run: /tmp/ci-venv/bin/python -m py_compile app/scraper.py
 
       - name: Run unit tests
-        run: /tmp/ci-venv/bin/python -m unittest test_scraper.py
+        run: /tmp/ci-venv/bin/python -m unittest discover -v
 
       - name: Check installed packages
         run: /tmp/ci-venv/bin/python -m pip check
