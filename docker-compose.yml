@@ -1,7 +1,7 @@
 services:
   fapplepie-downloader:
     # Use the versioned beta image from GitHub Container Registry.
-    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.10
+    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.11
     # To build locally instead, use docker-compose.dev.yml.
 
     container_name: fapplepie-downloader
@@ -22,6 +22,10 @@ services:
       #   0 */6 * * *   - Every 6 hours
       #   0 */12 * * *  - Every 12 hours
       CRON_SCHEDULE: "0 2 * * *"
+      # Flag the container unhealthy if its daily job is not dispatched within
+      # this grace period. Set this above the schedule interval plus expected
+      # run time when using a different cadence; 0 disables the age check.
+      CRON_MISSED_RUN_MAX_AGE_SECONDS: "93600"
 
       # Polite timing for scheduled scraper runs.
       # Manual one-shot runs start immediately.

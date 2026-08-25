@@ -407,6 +407,16 @@ docker ps  # Check status
 docker stats fapplepie-downloader  # Resource usage
 ```
 
+For cron diagnostics, the persisted `app/logs/cron_scheduler_started_at` file
+proves that the entrypoint installed the scheduler. Each real cron dispatch
+then writes `SCHEDULER_DISPATCHED` to the corresponding daily log and updates
+`app/logs/scheduled_run_state` with its UTC start time, state, and exit code.
+The built-in health check flags a missing scheduled dispatch after 26 hours by
+default. For a non-daily `CRON_SCHEDULE`, set
+`CRON_MISSED_RUN_MAX_AGE_SECONDS` to more than the schedule interval plus the
+expected run duration. Set it to `0` only to temporarily disable this age
+check during investigation.
+
 ### Backup downloads
 
 ```bash

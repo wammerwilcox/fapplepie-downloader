@@ -14,6 +14,22 @@ echo "=========================================="
 # Create necessary directories
 mkdir -p "${LOG_DIR}" "${DOWNLOAD_DIR}"
 
+write_scheduler_start_marker() {
+    local marker_file="${LOG_DIR}/cron_scheduler_started_at"
+    local marker_tmp
+
+    marker_tmp="$(mktemp "${LOG_DIR}/.cron_scheduler_started_at.XXXXXX")"
+    {
+        printf 'started_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf 'started_epoch=%s\n' "$(date -u +%s)"
+        printf 'schedule=%s\n' "${CRON_SCHEDULE:-0 2 * * *}"
+        printf 'timezone=%s\n' "${CRON_TZ:-${TZ:-UTC}}"
+    } > "${marker_tmp}"
+    mv "${marker_tmp}" "${marker_file}"
+
+    echo "Cron scheduler marker written: ${marker_file}"
+}
+
 # Export runtime env for cron-triggered jobs.
 write_cron_env_file() {
     local env_file="/app/.cron_env.sh"
@@ -67,6 +83,7 @@ setup_cron() {
     echo "Timezone: ${cron_tz}"
 
     write_cron_env_file
+    write_scheduler_start_marker
     
     # Use /etc/cron.d for deterministic in-container cron setup.
     cat > "${cron_file}" <<EOF
@@ -74,7 +91,7 @@ SHELL=/bin/bash
 PATH=/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 BASH_ENV=/app/.cron_env.sh
 CRON_TZ=${cron_tz}
-${schedule} root APPLY_SCHEDULED_START_JITTER=1 /app/daily_download.sh >> /proc/1/fd/1 2>> /proc/1/fd/2
+${schedule} root FAPPLEPIE_CRON_DISPATCHED=1 APPLY_SCHEDULED_START_JITTER=1 /app/daily_download.sh >> /proc/1/fd/1 2>> /proc/1/fd/2
 EOF
 
     chmod 0644 "${cron_file}"

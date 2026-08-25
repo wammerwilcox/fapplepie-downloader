@@ -1,6 +1,8 @@
 import io
+import os
 import subprocess
 import sys
+import time
 import unittest
 from contextlib import nullcontext
 from pathlib import Path
@@ -364,7 +366,116 @@ class ScraperTransportTests(unittest.TestCase):
         self.assertIn("SCRAPER_ARGS=(--scheduled", daily_text)
         self.assertIn('2>&1 | tee -a "${LOG_FILE}"', daily_text)
         self.assertIn("SCRAPER_EXIT_CODE=${PIPESTATUS[0]}", daily_text)
+        self.assertIn("FAPPLEPIE_CRON_DISPATCHED=1", entrypoint_text)
         self.assertIn("APPLY_SCHEDULED_START_JITTER=1 /app/daily_download.sh", entrypoint_text)
+        self.assertIn("SCHEDULER_DISPATCHED", daily_text)
+        self.assertIn("write_scheduled_run_state", daily_text)
+
+    def test_scheduled_daily_wrapper_persists_dispatch_and_completion_state(self) -> None:
+        source_script = Path(__file__).resolve().parent / "app" / "daily_download.sh"
+
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            app_directory = root / "app"
+            venv_bin = root / "venv" / "bin"
+            logs_directory = root / "logs"
+            app_directory.mkdir()
+            venv_bin.mkdir(parents=True)
+            logs_directory.mkdir()
+
+            script_path = app_directory / "daily_download.sh"
+            script_path.write_text(source_script.read_text())
+            script_path.chmod(0o755)
+            (venv_bin / "activate").write_text("PATH=\"%s:$PATH\"\n" % venv_bin)
+            python_stub = venv_bin / "python3"
+            python_stub.write_text("#!/usr/bin/env bash\necho fake scraper\n")
+            python_stub.chmod(0o755)
+
+            result = subprocess.run(
+                ["bash", str(script_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+                env={
+                    **os.environ,
+                    "FAPPLEPIE_CRON_DISPATCHED": "1",
+                    "LOG_DIR": str(logs_directory),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            state = (logs_directory / "scheduled_run_state").read_text()
+            self.assertIn("state=completed", state)
+            self.assertIn("exit_code=0", state)
+            self.assertIn("started_epoch=", state)
+            self.assertIn("SCHEDULER_DISPATCHED", result.stdout)
+
+    def test_cron_healthcheck_detects_a_missed_run_after_grace_period(self) -> None:
+        healthcheck_path = Path(__file__).resolve().parent / "app" / "cron_healthcheck.sh"
+
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            bin_directory = root / "bin"
+            logs_directory = root / "logs"
+            bin_directory.mkdir()
+            logs_directory.mkdir()
+            pgrep_stub = bin_directory / "pgrep"
+            pgrep_stub.write_text("#!/usr/bin/env bash\nexit 0\n")
+            pgrep_stub.chmod(0o755)
+
+            (logs_directory / "cron_scheduler_started_at").write_text(
+                "started_at_utc=2026-01-01T00:00:00Z\nstarted_epoch=1\n"
+            )
+            result = subprocess.run(
+                ["bash", str(healthcheck_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+                env={
+                    **os.environ,
+                    "PATH": f"{bin_directory}:{os.environ['PATH']}",
+                    "LOG_DIR": str(logs_directory),
+                    "CRON_MISSED_RUN_MAX_AGE_SECONDS": "1",
+                },
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("scheduler startup without a dispatch", result.stdout)
+
+    def test_cron_healthcheck_uses_newer_scheduler_start_than_old_state(self) -> None:
+        healthcheck_path = Path(__file__).resolve().parent / "app" / "cron_healthcheck.sh"
+
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            bin_directory = root / "bin"
+            logs_directory = root / "logs"
+            bin_directory.mkdir()
+            logs_directory.mkdir()
+            pgrep_stub = bin_directory / "pgrep"
+            pgrep_stub.write_text("#!/usr/bin/env bash\nexit 0\n")
+            pgrep_stub.chmod(0o755)
+            now_epoch = int(time.time())
+
+            (logs_directory / "cron_scheduler_started_at").write_text(
+                f"started_epoch={now_epoch}\n"
+            )
+            (logs_directory / "scheduled_run_state").write_text(
+                "state=completed\nstarted_epoch=1\nexit_code=0\n"
+            )
+            result = subprocess.run(
+                ["bash", str(healthcheck_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+                env={
+                    **os.environ,
+                    "PATH": f"{bin_directory}:{os.environ['PATH']}",
+                    "LOG_DIR": str(logs_directory),
+                    "CRON_MISSED_RUN_MAX_AGE_SECONDS": "60",
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout)
 
     def test_cli_probe_calls_probe_scraper_and_exits_successfully(self) -> None:
         result = scraper.ProbeResult(
