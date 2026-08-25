@@ -35,7 +35,7 @@ docker compose down
 ```
 
 The default compose file uses the versioned beta image from GitHub Container Registry:
-`ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.10`. Runtime state is written under `app/cache/`, `app/downloads/`, and `app/logs/`; those paths are ignored by Git.
+`ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.11`. Runtime state is written under `app/cache/`, `app/downloads/`, and `app/logs/`; those paths are ignored by Git.
 
 For local image development, use:
 
@@ -89,7 +89,19 @@ Docker runs on a cron schedule by default:
 ```yaml
 environment:
   CRON_SCHEDULE: "0 2 * * *"
+  # Daily schedule: 26-hour grace period before health flags a missed run.
+  CRON_MISSED_RUN_MAX_AGE_SECONDS: "93600"
 ```
+
+Each scheduled run writes `SCHEDULER_DISPATCHED` into its persisted daily log,
+then records its start time, state, and exit code in
+`app/logs/scheduled_run_state`. The scheduler also records its startup in
+`app/logs/cron_scheduler_started_at`. The container health check reports an
+unhealthy service if it has not seen a dispatch within
+`CRON_MISSED_RUN_MAX_AGE_SECONDS` (26 hours by default for a daily schedule).
+For a different cadence, set this to longer than the schedule interval plus
+the expected run duration. Set it to `0` only to disable age checking while
+investigating.
 
 For standalone cron setup, see [docs/CRONTAB_SETUP.md](docs/CRONTAB_SETUP.md).
 
