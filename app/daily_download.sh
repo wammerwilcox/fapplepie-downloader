@@ -1,4 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
+set -euo pipefail
 
 # Daily video scraper and downloader script
 # Add to crontab with: 0 2 * * * /path/to/daily_download.sh
@@ -76,8 +78,10 @@ if [ "${APPLY_SCHEDULED_START_JITTER:-0}" = "1" ]; then
 fi
 
 log "Running: python3 scraper.py ${SCRAPER_ARGS[*]}"
+set +e
 python3 scraper.py "${SCRAPER_ARGS[@]}" 2>&1 | tee -a "${LOG_FILE}"
 SCRAPER_EXIT_CODE=${PIPESTATUS[0]}
+set -e
 
 if [ $SCRAPER_EXIT_CODE -eq 0 ]; then
     log "SUCCESS: Scraper completed successfully"
