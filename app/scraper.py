@@ -800,11 +800,8 @@ def _request_for_scrape(
         transport_state.mode if is_fapplepie_request else SCRAPE_TRANSPORT_CONFIGURED
     )
 
-    response = None
-    initial_proxied = False
+    _, initial_proxied = _transport_proxies_for_request(url, initial_transport_mode)
     fallback_allowed = _scrape_direct_fallback_enabled()
-    proxy_failed = False
-    proxy_error: BaseException | None = None
 
     try:
         response = _request_with_retries(
@@ -816,63 +813,50 @@ def _request_for_scrape(
             backoff_seconds=backoff_seconds,
             transport_mode=initial_transport_mode,
         )
-        initial_proxied = getattr(response, "codex_proxied", False)
-    except SCRAPE_REQUEST_EXCEPTIONS as exc:
-        proxy_failed = True
-        proxy_error = exc
+    except SCRAPE_REQUEST_EXCEPTIONS:
         if not (
             is_fapplepie_request
             and initial_transport_mode == SCRAPE_TRANSPORT_CONFIGURED
+            and initial_proxied
             and fallback_allowed
         ):
-            raise
-        logger.warning(
-            "Fapplepie request via proxy failed: %s; retrying direct: %s",
-            _redact_sensitive_text(exc),
-            _redact_sensitive_text(url),
-        )
-
-    if response is not None:
-        response = _annotate_response_transport(
-            response,
-            initial_transport_mode=initial_transport_mode,
-            initial_proxied=initial_proxied,
-            fallback_attempted=False,
-        )
-
-    should_retry_direct = (
-        (proxy_failed or (response is not None and response.status_code == 403))
-        and is_fapplepie_request
-        and initial_transport_mode == SCRAPE_TRANSPORT_CONFIGURED
-        and fallback_allowed
-    )
-    if not should_retry_direct:
-        if response is None:
             if (
                 is_fapplepie_request
                 and initial_transport_mode == SCRAPE_TRANSPORT_CONFIGURED
+                and initial_proxied
                 and not fallback_allowed
             ):
                 logger.warning(
                     "Fapplepie request via proxy failed and direct fallback is disabled: %s",
                     _redact_sensitive_text(url),
                 )
-            return response
-        if (
+            raise
+        fallback_reason = "proxied request failure"
+    else:
+        response = _annotate_response_transport(
+            response,
+            initial_transport_mode=initial_transport_mode,
+            initial_proxied=initial_proxied,
+            fallback_attempted=False,
+        )
+        if not (
             is_fapplepie_request
-            and response.status_code == 403
             and initial_transport_mode == SCRAPE_TRANSPORT_CONFIGURED
             and initial_proxied
-            and not fallback_allowed
+            and response.status_code == 403
         ):
+            return response
+        if not fallback_allowed:
             logger.warning(
                 "Fapplepie request returned 403 via proxy and direct fallback is disabled: %s",
                 _redact_sensitive_text(url),
             )
-        return response
+            return response
+        fallback_reason = "proxied 403"
 
     logger.warning(
-        "Fapplepie request via proxy failed; retrying direct: %s",
+        "Fapplepie %s; retrying direct: %s",
+        fallback_reason,
         _redact_sensitive_text(url),
     )
     direct_response = _request_with_retries(
@@ -894,7 +878,8 @@ def _request_for_scrape(
     if direct_response.ok:
         transport_state.mode = SCRAPE_TRANSPORT_DIRECT
         logger.warning(
-            "Pinned direct scrape transport after proxied 403: %s",
+            "Pinned direct scrape transport after %s: %s",
+            fallback_reason,
             _redact_sensitive_text(url),
         )
     else:
@@ -1166,16 +1151,14 @@ def probe_scraper(base_url: str) -> ProbeResult:
 
         sample_url = video_urls[0]
         try:
-            redirect_response = _request_for_scrape(
+            sample_final_url = _resolve_download_redirect(
                 session,
                 sample_url,
                 timeout=request_timeout,
-                allow_redirects=True,
                 max_attempts=request_attempts,
                 backoff_seconds=retry_backoff,
                 transport_state=transport_state,
             )
-            redirect_response.raise_for_status()
         except SCRAPE_REQUEST_EXCEPTIONS as exc:
             raise ProbeError("sample_redirect", str(exc)) from exc
 
@@ -1185,7 +1168,7 @@ def probe_scraper(base_url: str) -> ProbeResult:
             video_count=len(video_urls),
             has_next_page=has_next_page,
             sample_url=sample_url,
-            sample_final_url=redirect_response.url,
+            sample_final_url=sample_final_url,
         )
 
 
@@ -1374,7 +1357,7 @@ def scrape_videos(base_url, output_file):
         print(f"Error processing page: {e}", file=sys.stderr)
         sys.exit(1)
 
-def download_videos(urls_file='video_urls.txt', output_dir='downloads'):
+def download_videos(urls_file='video_urls.txt', output_dir='downloads') -> int:
     """
     Download videos from URLs using yt-dlp
     Uses cache to avoid re-downloading known videos
@@ -1475,6 +1458,7 @@ def download_videos(urls_file='video_urls.txt', output_dir='downloads'):
     print(f"  Failed: {failed}")
     print(f"Cache saved to: {CACHE_PATH}")
     print(f"{'='*60}")
+    return failed
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point for scraper actions."""
@@ -1552,7 +1536,11 @@ def main(argv: list[str] | None = None) -> int:
         print()
 
     if args.download:
-        download_videos(urls_file, args.output_dir)
+        failed_downloads = download_videos(urls_file, args.output_dir)
+        if failed_downloads:
+            noun = "download" if failed_downloads == 1 else "downloads"
+            print(f"{failed_downloads} {noun} failed.", file=sys.stderr)
+            return 1
 
     return 0
 

@@ -171,7 +171,7 @@ class ScraperTransportTests(unittest.TestCase):
         self.assertIs(request_args[0], session)
         self.assertEqual(request_args[1], "https://www.fapplepie.com/watch/abc")
         self.assertEqual(request_kwargs["timeout"], 10.0)
-        self.assertTrue(request_kwargs["allow_redirects"])
+        self.assertFalse(request_kwargs["allow_redirects"])
         self.assertEqual(request_kwargs["max_attempts"], 3)
         self.assertEqual(request_kwargs["backoff_seconds"], 1.0)
         self.assertIs(request_kwargs["transport_state"], transport_state)
@@ -362,6 +362,8 @@ class ScraperTransportTests(unittest.TestCase):
 
         self.assertEqual(daily_result.returncode, 0, daily_result.stderr)
         self.assertEqual(entrypoint_result.returncode, 0, entrypoint_result.stderr)
+        self.assertTrue(daily_text.startswith("#!/usr/bin/env bash\n\nset -euo pipefail"))
+        self.assertTrue(entrypoint_text.startswith("#!/usr/bin/env bash"))
         self.assertIn("APPLY_SCHEDULED_START_JITTER", daily_text)
         self.assertIn("SCRAPER_ARGS=(--scheduled", daily_text)
         self.assertIn('2>&1 | tee -a "${LOG_FILE}"', daily_text)
@@ -370,6 +372,8 @@ class ScraperTransportTests(unittest.TestCase):
         self.assertIn("APPLY_SCHEDULED_START_JITTER=1 /app/daily_download.sh", entrypoint_text)
         self.assertIn("SCHEDULER_DISPATCHED", daily_text)
         self.assertIn("write_scheduled_run_state", daily_text)
+        self.assertIn("NORDVPN_PROXY_POOL", entrypoint_text)
+        self.assertIn("NORDVPN_PROXY_DOWNLOAD_DOMAINS", entrypoint_text)
 
     def test_scheduled_daily_wrapper_persists_dispatch_and_completion_state(self) -> None:
         source_script = Path(__file__).resolve().parent / "app" / "daily_download.sh"
@@ -530,6 +534,53 @@ class ScraperTransportTests(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), f"Fapplepie Downloader v{scraper.__version__}\n")
         self.assertEqual(stderr.getvalue(), f"Probe failed: {error}\n")
 
+    def test_cli_download_failures_exit_nonzero(self) -> None:
+        with patch.object(scraper, "_get_proxy_settings", return_value=(None, None)):
+            with patch.object(scraper, "_log_proxy_self_check"):
+                with patch.object(scraper, "download_videos", return_value=1) as download_videos:
+                    with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                        exit_code = scraper.main(["--download"])
+
+        self.assertEqual(exit_code, 1)
+        download_videos.assert_called_once()
+        self.assertIn("1 download failed", stderr.getvalue())
+
+    def test_probe_uses_download_redirect_resolver(self) -> None:
+        session = Mock()
+        session.headers = {"User-Agent": "test-agent"}
+        first_response = make_response(200, "https://www.fapplepie.com/videos")
+        sample_url = "https://www.fapplepie.com/watch/abc"
+        sample_final_url = "https://www.eporner.com/video-abc/example/"
+
+        with patch.object(
+            scraper,
+            "_build_scrape_session",
+            return_value=nullcontext(session),
+        ):
+            with patch.object(
+                scraper,
+                "_resolve_working_base_url",
+                return_value=("https://www.fapplepie.com/videos", first_response),
+            ):
+                with patch.object(scraper, "_fetch_robots_txt", return_value=None):
+                    with patch.object(
+                        scraper,
+                        "_parse_video_links",
+                        return_value=([sample_url], False),
+                    ):
+                        with patch.object(
+                            scraper,
+                            "_resolve_download_redirect",
+                            return_value=sample_final_url,
+                        ) as resolve_redirect:
+                            result = scraper.probe_scraper(
+                                "https://fapplepie.com/videos"
+                            )
+
+        self.assertEqual(result.sample_url, sample_url)
+        self.assertEqual(result.sample_final_url, sample_final_url)
+        resolve_redirect.assert_called_once()
+
     def test_scrape_videos_paginates_after_malformed_h3_links(self) -> None:
         first_response = make_response(200, "https://www.fapplepie.com/videos")
         first_response._content = b"<h3><a>Broken</a></h3><a>next \xe2\x80\xba</a>"
@@ -648,6 +699,69 @@ class ScraperTransportTests(unittest.TestCase):
         self.assertEqual(transport_state.mode, scraper.SCRAPE_TRANSPORT_CONFIGURED)
         self.assertEqual(session.get.call_count, 1)
         self.assertIsNotNone(session.get.call_args.kwargs["proxies"])
+
+    def test_direct_request_error_does_not_retry_the_same_route(self) -> None:
+        session = Mock()
+        session.headers = dict(scraper.DEFAULT_SCRAPE_HEADERS)
+        session.get.side_effect = requests.ConnectionError("connection closed")
+
+        with patch.object(scraper, "_proxy_url_for_target", return_value=None):
+            with self.assertRaises(requests.ConnectionError):
+                scraper._request_for_scrape(
+                    session,
+                    "https://fapplepie.com/videos",
+                    max_attempts=1,
+                )
+
+        self.assertEqual(session.get.call_count, 1)
+        self.assertIsNone(session.get.call_args.kwargs["proxies"])
+
+    def test_proxied_request_error_retries_direct_and_pins_transport(self) -> None:
+        session = Mock()
+        session.headers = dict(scraper.DEFAULT_SCRAPE_HEADERS)
+        session.get.side_effect = [
+            requests.ConnectionError("connection closed"),
+            make_response(200, "https://fapplepie.com/videos"),
+        ]
+        transport_state = scraper.ScrapeTransportState()
+
+        with patch.object(
+            scraper,
+            "_proxy_url_for_target",
+            return_value="socks5h://proxy.example:1080",
+        ):
+            response = scraper._request_for_scrape(
+                session,
+                "https://fapplepie.com/videos",
+                max_attempts=1,
+                transport_state=transport_state,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(session.get.call_count, 2)
+        self.assertIsNotNone(session.get.call_args_list[0].kwargs["proxies"])
+        self.assertIsNone(session.get.call_args_list[1].kwargs["proxies"])
+        self.assertEqual(transport_state.mode, scraper.SCRAPE_TRANSPORT_DIRECT)
+
+    def test_proxied_request_error_raises_when_direct_fallback_is_disabled(self) -> None:
+        session = Mock()
+        session.headers = dict(scraper.DEFAULT_SCRAPE_HEADERS)
+        session.get.side_effect = requests.ConnectionError("connection closed")
+
+        with patch.dict("os.environ", {"SCRAPE_DIRECT_FALLBACK_ON_403": "0"}, clear=False):
+            with patch.object(
+                scraper,
+                "_proxy_url_for_target",
+                return_value="socks5h://proxy.example:1080",
+            ):
+                with self.assertRaises(requests.ConnectionError):
+                    scraper._request_for_scrape(
+                        session,
+                        "https://fapplepie.com/videos",
+                        max_attempts=1,
+                    )
+
+        self.assertEqual(session.get.call_count, 1)
 
     def test_resolve_working_base_url_reports_403_after_direct_retry(self) -> None:
         session = Mock()
@@ -1051,11 +1165,12 @@ class ScraperTransportTests(unittest.TestCase):
                                             },
                                             clear=False,
                                         ):
-                                            scraper.download_videos(
+                                            failed = scraper.download_videos(
                                                 "video_urls.txt",
                                                 str(output_dir),
                                             )
 
+        self.assertEqual(failed, 0)
         cmd = run.call_args.args[0]
         self.assertIn("--proxy", cmd)
         self.assertIn("socks5h://proxy.example:1080", cmd)
@@ -1063,6 +1178,45 @@ class ScraperTransportTests(unittest.TestCase):
         self.assertEqual(cmd[-1], url)
         scraper._get_proxy_settings.cache_clear()
         scraper._get_proxy_scope.cache_clear()
+
+    def test_download_videos_returns_failure_count_without_caching_failed_urls(self) -> None:
+        url = "https://www.example.com/video"
+        cache = {"downloaded_urls": []}
+
+        with TemporaryDirectory() as tmp_dir:
+            base_dir = Path(tmp_dir)
+            (base_dir / "video_urls.txt").write_text(url + "\n")
+            with patch.object(scraper, "BASE_DIR", base_dir):
+                with patch.object(scraper, "load_cache_locked", return_value=cache):
+                    with patch.object(scraper, "save_cache_locked"):
+                        with patch.object(
+                            scraper,
+                            "_resolve_executable",
+                            side_effect=["yt-dlp", "aria2c"],
+                        ):
+                            with patch.object(scraper, "_log_binary_version"):
+                                with patch.object(
+                                    scraper,
+                                    "_running_in_docker",
+                                    return_value=True,
+                                ):
+                                    with patch.object(
+                                        scraper.subprocess,
+                                        "run",
+                                        return_value=subprocess.CompletedProcess(
+                                            args=[],
+                                            returncode=1,
+                                            stdout="",
+                                            stderr="temporary failure",
+                                        ),
+                                    ):
+                                        failed = scraper.download_videos(
+                                            "video_urls.txt",
+                                            str(base_dir / "downloads"),
+                                        )
+
+        self.assertEqual(failed, 1)
+        self.assertEqual(cache["downloaded_urls"], [])
 
     def test_build_yt_dlp_command_includes_cookie_file_and_js_runtime(self) -> None:
         with TemporaryDirectory() as tmp_dir:

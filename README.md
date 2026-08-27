@@ -34,8 +34,8 @@ docker compose logs -f
 docker compose down
 ```
 
-The default compose file uses the versioned beta image from GitHub Container Registry:
-`ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.11`. Runtime state is written under `app/cache/`, `app/downloads/`, and `app/logs/`; those paths are ignored by Git.
+The default compose file uses the versioned release-candidate image from GitHub Container Registry:
+`ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-rc.1`. Runtime state is written under `app/cache/`, `app/downloads/`, and `app/logs/`; those paths are ignored by Git.
 
 For local image development, use:
 
@@ -103,6 +103,9 @@ For a different cadence, set this to longer than the schedule interval plus
 the expected run duration. Set it to `0` only to disable age checking while
 investigating.
 
+A run with one or more failed downloads exits non-zero. Failed URLs remain out
+of the downloaded cache, so the next run can try them again.
+
 For standalone cron setup, see [docs/CRONTAB_SETUP.md](docs/CRONTAB_SETUP.md).
 
 ### Optional Proxy
@@ -122,7 +125,7 @@ Additional proxy controls:
 - `NORDVPN_PROXY_SCOPE=fapplepie` proxies only fapplepie traffic.
 - `NORDVPN_PROXY_SCOPE=all` proxies all scraper/downloader traffic.
 - `NORDVPN_PROXY_DOWNLOAD_DOMAINS=xhamster.com` proxies downloads from selected domains and subdomains while leaving other downloads direct.
-- `SCRAPE_DIRECT_FALLBACK_ON_403=1` retries scraper requests directly after proxied HTTP 403 responses.
+- `SCRAPE_DIRECT_FALLBACK_ON_403=1` permits one direct retry after a proxied scraper failure or proxied HTTP 403 response.
 
 Fapplepie HTML requests use HTTP/1.1 with the browser impersonation profile.
 Downloader requests keep their existing transport behavior.

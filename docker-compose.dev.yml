@@ -41,6 +41,7 @@ services:
       NORDVPN_PROXY_POOL: "${NORDVPN_PROXY_POOL:-}"
       NORDVPN_USER: "${NORDVPN_USER:-}"
       NORDVPN_PASS: "${NORDVPN_PASS:-}"
+      NORDVPN_PROXY_SCOPE: "${NORDVPN_PROXY_SCOPE:-fapplepie}"
       NORDVPN_PROXY_DOWNLOAD_DOMAINS: "${NORDVPN_PROXY_DOWNLOAD_DOMAINS:-}"
       
       # Development mode (optional)

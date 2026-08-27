@@ -64,10 +64,10 @@ Runs the scraper on a schedule inside the container:
 docker-compose up -d
 ```
 
-The default compose file on this branch uses the versioned beta image from GitHub Container Registry:
+The default compose file on this branch uses the versioned release-candidate image from GitHub Container Registry:
 
 ```yaml
-image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.8
+image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-rc.1
 ```
 
 ### One-Time Execution Mode
@@ -100,7 +100,7 @@ environment:
   # NORDVPN_PROXY_POOL: "proxy-a.example:1080,proxy-b.example:1080"
   # NORDVPN_USER: "${NORDVPN_USER}" # NordVPN service username
   # NORDVPN_PASS: "${NORDVPN_PASS}" # NordVPN service password
-  # SCRAPE_DIRECT_FALLBACK_ON_403: "1" # Retry scrape requests directly if proxied fapplepie requests get HTTP 403
+  # SCRAPE_DIRECT_FALLBACK_ON_403: "1" # Retry directly after a proxied scraper failure or HTTP 403
 ```
 
 **Command line**:
@@ -138,8 +138,8 @@ Notes:
   `fapplepie`. For example, `xhamster.com` also matches subdomains such as
   `de.xhamster.com`.
 - `SCRAPE_DIRECT_FALLBACK_ON_403`:
-  - `1` (default): retry `fapplepie.com` scrape requests directly if the proxied request returns `403`
-  - `0`: keep scrape requests proxy-only and fail fast on proxied `403`
+  - `1` (default): retry `fapplepie.com` scrape requests directly after a proxied failure or proxied `403`
+  - `0`: keep scrape requests proxy-only and fail fast
 - `NORD_TOKEN` / `NORDVPN_TOKEN` are not proxy credentials.
   Use NordVPN service credentials for proxy auth.
 - For `socks5://` or `socks5h://` proxies, downloads use yt-dlp's native
@@ -381,7 +381,7 @@ To update the script:
 git pull
 ```
 
-2. **Pull the pinned beta image and restart**:
+2. **Pull the pinned release-candidate image and restart**:
 
 ```bash
 docker-compose pull
@@ -390,12 +390,12 @@ docker-compose up -d
 
 ## Production Considerations
 
-### Use versioned beta images
+### Use versioned release-candidate images
 
-The checked-in `docker-compose.yml` uses a versioned GHCR beta image:
+The checked-in `docker-compose.yml` uses a versioned GHCR release-candidate image:
 
 ```yaml
-image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.8
+image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-rc.1
 ```
 
 For multi-architecture deployments that should select the platform automatically, use the tag without an architecture-specific digest.
@@ -436,7 +436,7 @@ To run multiple instances with different schedules:
 ```yaml
 services:
   downloader-morning:
-    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.8
+    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-rc.1
     environment:
       CRON_SCHEDULE: "0 6 * * *"
     volumes:
@@ -444,7 +444,7 @@ services:
       - ./logs-morning:/app/logs
 
   downloader-evening:
-    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.8
+    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-rc.1
     environment:
       CRON_SCHEDULE: "0 18 * * *"
     volumes:
@@ -454,8 +454,8 @@ services:
 
 ## Published Image
 
-Beta images are published to GitHub Container Registry:
+Release-candidate images are published to GitHub Container Registry:
 
 ```bash
-docker pull ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-beta.8
+docker pull ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-rc.1
 ```
