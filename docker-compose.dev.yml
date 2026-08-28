@@ -14,6 +14,7 @@ services:
       - ./app/downloads:/app/downloads
       - ./app/logs:/app/logs
       - ./app/cache:/app/cache
+      - ./app/secrets:/app/secrets
       # Mount source code for live development (optional)
       # - ./app/scraper.py:/app/scraper.py:ro
 
@@ -25,16 +26,23 @@ services:
       # Directories
       DOWNLOAD_DIR: /app/downloads
       LOG_DIR: /app/logs
+      YT_DLP_JS_RUNTIMES: "${YT_DLP_JS_RUNTIMES:-deno}"
+      YT_DLP_COOKIES_FILE: "${YT_DLP_COOKIES_FILE:-}"
+      YT_DLP_COOKIES_FROM_BROWSER: "${YT_DLP_COOKIES_FROM_BROWSER:-}"
 
       # Optional outbound proxy for scraper + downloader traffic.
       # Leave values empty to use direct network routing.
       # Example:
       #   NORDVPN_PROXY=socks5h://nl.socks.nordhold.net:1080
+      #   NORDVPN_PROXY_POOL=proxy-a.example:1080,proxy-b.example:1080
       #   NORDVPN_USER=<service username>
       #   NORDVPN_PASS=<service password>
       NORDVPN_PROXY: "${NORDVPN_PROXY:-}"
+      NORDVPN_PROXY_POOL: "${NORDVPN_PROXY_POOL:-}"
       NORDVPN_USER: "${NORDVPN_USER:-}"
       NORDVPN_PASS: "${NORDVPN_PASS:-}"
+      NORDVPN_PROXY_SCOPE: "${NORDVPN_PROXY_SCOPE:-fapplepie}"
+      NORDVPN_PROXY_DOWNLOAD_DOMAINS: "${NORDVPN_PROXY_DOWNLOAD_DOMAINS:-}"
       
       # Development mode (optional)
       PYTHONUNBUFFERED: "1"

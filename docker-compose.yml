@@ -1,7 +1,7 @@
 services:
   fapplepie-downloader:
     # Use the versioned release image from GitHub Container Registry.
-    image: ghcr.io/wammerwilcox/fapplepie-downloader:1.1.4@sha256:abf6754365b172370e755a95b9865418b720c44f21392af1d07c7382efad14b4
+    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0
     # To build locally instead, use docker-compose.dev.yml.
 
     container_name: fapplepie-downloader
@@ -11,6 +11,7 @@ services:
       - ./app/downloads:/app/downloads
       - ./app/logs:/app/logs
       - ./app/cache:/app/cache
+      - ./app/secrets:/app/secrets
 
     # Environment variables
     environment:
@@ -21,20 +22,40 @@ services:
       #   0 */6 * * *   - Every 6 hours
       #   0 */12 * * *  - Every 12 hours
       CRON_SCHEDULE: "0 2 * * *"
+      # Flag the container unhealthy if its daily job is not dispatched within
+      # this grace period. Set this above the schedule interval plus expected
+      # run time when using a different cadence; 0 disables the age check.
+      CRON_MISSED_RUN_MAX_AGE_SECONDS: "93600"
+
+      # Polite timing for scheduled scraper runs.
+      # Manual one-shot runs start immediately.
+      SCRAPE_START_DELAY_SECONDS: "0"
+      SCRAPE_START_DELAY_JITTER_SECONDS: "1800"
+      SCRAPE_DELAY_SECONDS: "1.0"
+      SCRAPE_DELAY_JITTER_SECONDS: "0"
+      SCRAPE_REDIRECT_DELAY_SECONDS: "1.0"
+      SCRAPE_REDIRECT_DELAY_JITTER_SECONDS: "1.0"
 
       # Directories
       DOWNLOAD_DIR: /app/downloads
       LOG_DIR: /app/logs
+      YT_DLP_JS_RUNTIMES: "${YT_DLP_JS_RUNTIMES:-deno}"
+      YT_DLP_COOKIES_FILE: "${YT_DLP_COOKIES_FILE:-}"
+      YT_DLP_COOKIES_FROM_BROWSER: "${YT_DLP_COOKIES_FROM_BROWSER:-}"
 
       # Optional outbound proxy for scraper + downloader traffic.
       # Leave values empty to use direct network routing.
       # Example:
       #   NORDVPN_PROXY=socks5h://nl.socks.nordhold.net:1080
+      #   NORDVPN_PROXY_POOL=proxy-a.example:1080,proxy-b.example:1080
       #   NORDVPN_USER=<service username>
       #   NORDVPN_PASS=<service password>
       NORDVPN_PROXY: "${NORDVPN_PROXY:-}"
+      NORDVPN_PROXY_POOL: "${NORDVPN_PROXY_POOL:-}"
       NORDVPN_USER: "${NORDVPN_USER:-}"
       NORDVPN_PASS: "${NORDVPN_PASS:-}"
+      NORDVPN_PROXY_SCOPE: "${NORDVPN_PROXY_SCOPE:-fapplepie}"
+      NORDVPN_PROXY_DOWNLOAD_DOMAINS: "${NORDVPN_PROXY_DOWNLOAD_DOMAINS:-}"
 
     # Restart policy
     restart: unless-stopped

@@ -34,8 +34,8 @@ docker compose logs -f
 docker compose down
 ```
 
-The default compose file uses the pinned release image from GitHub Container Registry:
-`ghcr.io/wammerwilcox/fapplepie-downloader:1.1.4`. Runtime state is written under `app/cache/`, `app/downloads/`, and `app/logs/`; those paths are ignored by Git.
+The default compose file uses the versioned release image from GitHub Container Registry:
+`ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0`. Runtime state is written under `app/cache/`, `app/downloads/`, and `app/logs/`; those paths are ignored by Git.
 
 For local image development, use:
 
@@ -70,6 +70,9 @@ python3 app/scraper.py --download
 # Scrape and download
 python3 app/scraper.py --all
 
+# Probe scraper path without writing state
+python3 app/scraper.py --probe
+
 # Clear generated cache
 python3 app/scraper.py --clear-cache
 
@@ -86,7 +89,22 @@ Docker runs on a cron schedule by default:
 ```yaml
 environment:
   CRON_SCHEDULE: "0 2 * * *"
+  # Daily schedule: 26-hour grace period before health flags a missed run.
+  CRON_MISSED_RUN_MAX_AGE_SECONDS: "93600"
 ```
+
+Each scheduled run writes `SCHEDULER_DISPATCHED` into its persisted daily log,
+then records its start time, state, and exit code in
+`app/logs/scheduled_run_state`. The scheduler also records its startup in
+`app/logs/cron_scheduler_started_at`. The container health check reports an
+unhealthy service if it has not seen a dispatch within
+`CRON_MISSED_RUN_MAX_AGE_SECONDS` (26 hours by default for a daily schedule).
+For a different cadence, set this to longer than the schedule interval plus
+the expected run duration. Set it to `0` only to disable age checking while
+investigating.
+
+A run with one or more failed downloads exits non-zero. Failed URLs remain out
+of the downloaded cache, so the next run can try them again.
 
 For standalone cron setup, see [docs/CRONTAB_SETUP.md](docs/CRONTAB_SETUP.md).
 
@@ -103,9 +121,60 @@ environment:
 
 Additional proxy controls:
 
+- `NORDVPN_PROXY_POOL=proxy-a:1080,proxy-b:1080` selects one proxy at random when the process starts and keeps it for that run. When set, it takes precedence over `NORDVPN_PROXY`.
 - `NORDVPN_PROXY_SCOPE=fapplepie` proxies only fapplepie traffic.
 - `NORDVPN_PROXY_SCOPE=all` proxies all scraper/downloader traffic.
-- `SCRAPE_DIRECT_FALLBACK_ON_403=1` retries Fapplepie scraper requests directly after a proxied HTTP 403 response or a proxied connection failure. Direct failures are reported as upstream failures and are not redundantly retried.
+- `NORDVPN_PROXY_DOWNLOAD_DOMAINS=xhamster.com` proxies downloads from selected domains and subdomains while leaving other downloads direct.
+- `SCRAPE_DIRECT_FALLBACK_ON_403=1` permits one direct retry after a proxied scraper failure or proxied HTTP 403 response.
+
+Fapplepie HTML requests use HTTP/1.1 with the browser impersonation profile.
+Downloader requests keep their existing transport behavior.
+
+Use probe mode to validate the scraper fetch/parse/redirect path without writing URL/cache state or downloading.
+
+### YouTube Auth and JavaScript Runtime
+
+The Docker image includes Deno and configures `YT_DLP_JS_RUNTIMES=deno` so yt-dlp can solve current YouTube JavaScript challenges.
+
+For age-gated or signed-in YouTube videos, export a Netscape-format cookies file on the host and mount it into the container. Chrome is supported by yt-dlp, as are Brave, Chromium, Edge, Firefox, Opera, Safari, Vivaldi, and Whale.
+
+To export cookies from Chrome without installing yt-dlp locally:
+
+1. On the host machine, open Chrome and sign in to YouTube with the account that can view the video.
+2. Install a trusted Chrome extension that exports cookies in Netscape `cookies.txt` format. Avoid extensions that upload cookies to a remote service.
+3. Use the extension on `youtube.com` to export cookies, and save the file as `app/secrets/youtube.cookies.txt` in this repository.
+4. Confirm the file exists at `app/secrets/youtube.cookies.txt`.
+
+If yt-dlp is already installed on the host, this command can do the same export:
+
+```bash
+mkdir -p app/secrets
+yt-dlp --cookies-from-browser chrome --cookies app/secrets/youtube.cookies.txt --skip-download "https://www.youtube.com/"
+```
+
+If the command says Chrome's cookie database is locked, fully quit Chrome and run it again.
+
+Use the browser that has the active YouTube login. For Firefox, replace `chrome` with `firefox`; for a specific Chrome profile, use the yt-dlp browser profile syntax, for example `chrome:Profile 1`.
+
+Then set:
+
+```yaml
+environment:
+  YT_DLP_COOKIES_FILE: /app/secrets/youtube.cookies.txt
+```
+
+Cookies still expire on YouTube's schedule. Keep the host-side `app/secrets/youtube.cookies.txt` refreshed with your browser login, and the container will use the updated file on the next download run. The cookie file must be mounted read/write because yt-dlp saves cookie jar updates when it exits. Do not commit cookie files.
+
+### Polite Timing
+
+Scheduled scraper runs apply a random start delay before network work begins. Manual runs such as `--all`, `--scrape`, `--download`, `--probe`, and direct `daily_download.sh` executions start immediately.
+
+- `SCRAPE_START_DELAY_SECONDS=0` sets a fixed scheduled-run start delay.
+- `SCRAPE_START_DELAY_JITTER_SECONDS=1800` adds up to 30 minutes of scheduled-run start jitter.
+- `SCRAPE_DELAY_SECONDS=1.0` waits between paginated directory pages.
+- `SCRAPE_DELAY_JITTER_SECONDS=0` adds optional jitter to page waits.
+- `SCRAPE_REDIRECT_DELAY_SECONDS=1.0` waits between uncached redirect-resolution requests.
+- `SCRAPE_REDIRECT_DELAY_JITTER_SECONDS=1.0` adds jitter to redirect waits.
 
 ## Dependency Locking
 

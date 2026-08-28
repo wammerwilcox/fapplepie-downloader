@@ -13,8 +13,10 @@ from pathlib import Path
 import tempfile
 import time
 import logging
+import re
 import shutil
-from urllib.parse import quote, urlparse, urlunparse
+import random
+from urllib.parse import quote, urljoin, urlparse, urlunparse
 from urllib.robotparser import RobotFileParser
 from dataclasses import dataclass
 from functools import lru_cache
@@ -66,6 +68,24 @@ DEFAULT_SCRAPE_HEADERS = {
     "Upgrade-Insecure-Requests": "1",
     "Connection": "keep-alive",
 }
+FAPPLEPIE_HTTP11_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/139.0.0.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,*/*;q=0.8"
+    ),
+    "Accept-Language": "en-GB,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Upgrade-Insecure-Requests": "1",
+}
+URL_CREDENTIALS_PATTERN = re.compile(
+    r"(?P<scheme>[a-z][a-z0-9+.-]*://)[^/@\s]+@",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -75,19 +95,46 @@ class ScrapeTransportState:
     mode: str = SCRAPE_TRANSPORT_CONFIGURED
 
 
-def _redact_proxy_url(proxy_url: str) -> str:
-    """Hide proxy password in logs while keeping host/port visible."""
-    parsed = urlparse(proxy_url)
-    if parsed.password is None:
-        return proxy_url
+class ProbeError(Exception):
+    """Probe failure annotated with the scrape phase that failed."""
 
-    host = parsed.hostname or ""
-    if ":" in host and not host.startswith("["):
-        host = f"[{host}]"
-    port = f":{parsed.port}" if parsed.port else ""
-    username = parsed.username or ""
-    redacted_netloc = f"{username}:***@{host}{port}"
-    return urlunparse(parsed._replace(netloc=redacted_netloc))
+    def __init__(self, phase: str, message: str):
+        super().__init__(f"{phase}: {message}")
+        self.phase = phase
+
+
+@dataclass
+class ProbeResult:
+    working_base_url: str
+    final_base_url: str
+    video_count: int
+    has_next_page: bool
+    sample_url: str
+    sample_final_url: str
+
+    def format_success(self) -> str:
+        return (
+            "Probe successful: "
+            f"working_base_url={self.working_base_url} "
+            f"final_base_url={self.final_base_url} "
+            f"videos_found={self.video_count} "
+            f"has_next_page={self.has_next_page} "
+            f"sample_url={self.sample_url} "
+            f"sample_final_url={self.sample_final_url}"
+        )
+
+
+def _redact_proxy_url(proxy_url: str) -> str:
+    """Hide proxy user information while keeping host and port visible."""
+    return _redact_sensitive_text(proxy_url)
+
+
+def _redact_sensitive_text(value: object) -> str:
+    """Remove credentials embedded in URLs before writing text to logs."""
+    return URL_CREDENTIALS_PATTERN.sub(
+        lambda match: f"{match.group('scheme')}***:***@",
+        str(value),
+    )
 
 
 def _normalize_proxy_url(proxy_raw: str) -> str:
@@ -103,7 +150,10 @@ def _inject_proxy_credentials(proxy_url: str, username: str, password: str) -> s
     parsed = urlparse(proxy_url)
     host = parsed.hostname
     if not host:
-        raise ValueError(f"Invalid NORDVPN_PROXY value: {proxy_url}")
+        raise ValueError(
+            "Invalid NORDVPN_PROXY value: "
+            f"{_redact_sensitive_text(proxy_url)}"
+        )
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
     port = f":{parsed.port}" if parsed.port else ""
@@ -115,12 +165,21 @@ def _inject_proxy_credentials(proxy_url: str, username: str, password: str) -> s
 def _get_proxy_settings() -> tuple[str | None, dict | None]:
     """
     Build optional proxy config from environment.
-    If NORDVPN_PROXY is unset, return no proxy.
+    A configured pool takes precedence and selects one sticky proxy per process.
     """
-    proxy_raw = os.environ.get("NORDVPN_PROXY", "").strip()
+    proxy_pool = [
+        candidate.strip()
+        for candidate in os.environ.get("NORDVPN_PROXY_POOL", "").split(",")
+        if candidate.strip()
+    ]
+    proxy_raw = (
+        random.choice(proxy_pool)
+        if proxy_pool
+        else os.environ.get("NORDVPN_PROXY", "").strip()
+    )
     if not proxy_raw:
         logger.info(
-            "No outbound proxy configured (NORDVPN_PROXY unset); using direct network routing."
+            "No outbound proxy configured; using direct network routing."
         )
         return None, None
 
@@ -175,6 +234,25 @@ def _is_fapplepie_host(hostname: str | None) -> bool:
     return host == "fapplepie.com" or host.endswith(".fapplepie.com")
 
 
+def _hostname_matches_domain(hostname: str | None, domain: str) -> bool:
+    if not hostname:
+        return False
+    host = hostname.lower().rstrip(".")
+    normalized_domain = domain.strip().lower().lstrip(".").rstrip(".")
+    if not normalized_domain:
+        return False
+    return host == normalized_domain or host.endswith(f".{normalized_domain}")
+
+
+def _get_proxy_download_domains() -> list[str]:
+    raw_domains = os.environ.get("NORDVPN_PROXY_DOWNLOAD_DOMAINS", "")
+    return [
+        domain.strip()
+        for domain in raw_domains.split(",")
+        if domain.strip()
+    ]
+
+
 def _proxy_url_for_target(url: str) -> str | None:
     proxy_url, _ = _get_proxy_settings()
     if not proxy_url:
@@ -184,6 +262,11 @@ def _proxy_url_for_target(url: str) -> str | None:
         return proxy_url
     parsed = urlparse(url)
     if _is_fapplepie_host(parsed.hostname):
+        return proxy_url
+    if any(
+        _hostname_matches_domain(parsed.hostname, domain)
+        for domain in _get_proxy_download_domains()
+    ):
         return proxy_url
     return None
 
@@ -209,7 +292,7 @@ def _log_proxy_self_check() -> None:
         "Proxy self-check: scope=%s fapplepie=%s sample(%s)=%s",
         scope,
         fapplepie_mode,
-        sample_probe,
+        _redact_sensitive_text(sample_probe),
         sample_mode,
     )
 
@@ -239,6 +322,66 @@ def _request_impersonation_kwargs(session, url: str) -> dict:
     ):
         return {"impersonate": "chrome"}
     return {}
+
+
+def _sleep_with_jitter(
+    *,
+    base_seconds: float,
+    jitter_seconds: float,
+    reason: str,
+) -> None:
+    base_seconds = max(0.0, base_seconds)
+    jitter_seconds = max(0.0, jitter_seconds)
+    jitter = random.uniform(0, jitter_seconds) if jitter_seconds > 0 else 0.0
+    sleep_seconds = base_seconds + jitter
+    if sleep_seconds <= 0:
+        return
+
+    logger.info("%s: sleeping %.1fs", reason, sleep_seconds)
+    time.sleep(sleep_seconds)
+
+
+def _scrape_request_kwargs(session, url: str) -> dict:
+    kwargs = _request_impersonation_kwargs(session, url)
+    if kwargs and _is_fapplepie_host(urlparse(url).hostname):
+        kwargs["http_version"] = "v1"
+    return kwargs
+
+
+def _scrape_session_get(
+    session,
+    url: str,
+    *,
+    headers: dict | None,
+    timeout: float,
+    allow_redirects: bool,
+    proxies: dict | None,
+):
+    original_headers = None
+    request_headers = headers
+    if _is_fapplepie_host(urlparse(url).hostname):
+        try:
+            original_headers = dict(session.headers)
+        except (AttributeError, TypeError):
+            request_headers = FAPPLEPIE_HTTP11_HEADERS
+        else:
+            session.headers.clear()
+            session.headers.update(FAPPLEPIE_HTTP11_HEADERS)
+            request_headers = None
+
+    try:
+        return session.get(
+            url,
+            headers=request_headers,
+            timeout=timeout,
+            allow_redirects=allow_redirects,
+            proxies=proxies,
+            **_scrape_request_kwargs(session, url),
+        )
+    finally:
+        if original_headers is not None:
+            session.headers.clear()
+            session.headers.update(original_headers)
 
 
 def _transport_proxies_for_request(
@@ -282,7 +425,7 @@ def _format_probe_failure(candidate: str, response) -> str:
     final_proxied = getattr(response, "codex_proxied", initial_proxied)
     fallback_attempted = getattr(response, "codex_fallback_attempted", False)
     return (
-        f"{candidate} -> status={response.status_code} "
+        f"{_redact_sensitive_text(candidate)} -> status={response.status_code} "
         f"initial_transport={initial_transport} initial_proxied={initial_proxied} "
         f"final_transport={final_transport} final_proxied={final_proxied} "
         f"fallback_attempted={fallback_attempted}"
@@ -294,7 +437,127 @@ def _is_stale_resolved_url(source_url: str, resolved_url: str | None) -> bool:
         return True
     if resolved_url == source_url:
         return True
+    if _is_bad_resolved_download_target(resolved_url):
+        return True
     return _is_fapplepie_host(urlparse(resolved_url).hostname)
+
+
+def _is_bad_resolved_download_target(url: str | None) -> bool:
+    if not url:
+        return True
+    parsed = urlparse(url)
+    path = parsed.path or "/"
+    normalized_path = path.rstrip("/").lower() or "/"
+    if normalized_path == "/":
+        return True
+
+    last_segment = normalized_path.rsplit("/", 1)[-1]
+    return last_segment in {"login", "signin", "sign-in"}
+
+
+def _iter_redirect_chain_urls(response) -> list[str]:
+    urls: list[str] = []
+    for redirect_response in getattr(response, "history", []) or []:
+        if getattr(redirect_response, "url", None):
+            urls.append(redirect_response.url)
+        location = redirect_response.headers.get("Location")
+        if location:
+            urls.append(urljoin(redirect_response.url, location))
+    if getattr(response, "url", None):
+        urls.append(response.url)
+    return urls
+
+
+def _select_resolved_download_url(source_url: str, response) -> str:
+    final_url = response.url
+    if not _is_bad_resolved_download_target(final_url):
+        return final_url
+
+    for candidate in reversed(_iter_redirect_chain_urls(response)[:-1]):
+        if candidate == source_url:
+            continue
+        if _is_fapplepie_host(urlparse(candidate).hostname):
+            continue
+        if not _is_bad_resolved_download_target(candidate):
+            logger.warning(
+                "Resolved redirect ended at bad target %s; preserving previous target %s",
+                final_url,
+                candidate,
+            )
+            return candidate
+
+    return final_url
+
+
+def _resolve_download_redirect(
+    session: requests.Session,
+    source_url: str,
+    *,
+    timeout: float,
+    max_attempts: int,
+    backoff_seconds: float,
+    transport_state: ScrapeTransportState,
+    max_redirects: int = 10,
+) -> str:
+    current_url = source_url
+    visited_urls: set[str] = set()
+    last_good_external_url: str | None = None
+
+    for _ in range(max_redirects):
+        if current_url in visited_urls:
+            logger.warning("Redirect loop detected while resolving %s", source_url)
+            return last_good_external_url or current_url
+        visited_urls.add(current_url)
+
+        response = _request_for_scrape(
+            session,
+            current_url,
+            timeout=timeout,
+            allow_redirects=False,
+            max_attempts=max_attempts,
+            backoff_seconds=backoff_seconds,
+            transport_state=transport_state,
+        )
+        response.raise_for_status()
+
+        response_url = getattr(response, "url", None) or current_url
+        if (
+            not _is_fapplepie_host(urlparse(response_url).hostname)
+            and not _is_bad_resolved_download_target(response_url)
+        ):
+            last_good_external_url = response_url
+
+        location = response.headers.get("Location")
+        if not (300 <= response.status_code < 400 and location):
+            if _is_bad_resolved_download_target(response_url):
+                return last_good_external_url or response_url
+            return response_url
+
+        next_url = urljoin(response_url, location)
+        if (
+            not _is_fapplepie_host(urlparse(next_url).hostname)
+            and not _is_bad_resolved_download_target(next_url)
+        ):
+            last_good_external_url = next_url
+
+        if _is_bad_resolved_download_target(next_url):
+            if last_good_external_url:
+                logger.warning(
+                    "Resolved redirect would end at bad target %s; preserving previous target %s",
+                    next_url,
+                    last_good_external_url,
+                )
+                return last_good_external_url
+            return next_url
+
+        current_url = next_url
+
+    logger.warning(
+        "Redirect resolution exceeded %d hops for %s",
+        max_redirects,
+        source_url,
+    )
+    return last_good_external_url or current_url
 
 
 def _ensure_under_base(path_value: str | Path, kind: str) -> Path:
@@ -362,6 +625,70 @@ def _log_binary_version(binary_path: str, binary_name: str) -> None:
         logger.warning("Unable to determine %s version", binary_name)
 
 
+def _yt_dlp_cookie_args() -> list[str]:
+    cookies_file = os.environ.get("YT_DLP_COOKIES_FILE", "").strip()
+    cookies_from_browser = os.environ.get("YT_DLP_COOKIES_FROM_BROWSER", "").strip()
+
+    if cookies_file and cookies_from_browser:
+        raise ValueError(
+            "Configure only one cookie source: YT_DLP_COOKIES_FILE or "
+            "YT_DLP_COOKIES_FROM_BROWSER."
+        )
+
+    if cookies_file:
+        cookies_path = Path(cookies_file).expanduser()
+        if not cookies_path.exists():
+            raise FileNotFoundError(
+                f"YT_DLP_COOKIES_FILE is set but does not exist: {cookies_file}"
+            )
+        return ["--cookies", str(cookies_path)]
+
+    if cookies_from_browser:
+        return ["--cookies-from-browser", cookies_from_browser]
+
+    return []
+
+
+def _yt_dlp_js_runtime_args() -> list[str]:
+    js_runtimes = os.environ.get("YT_DLP_JS_RUNTIMES", "").strip()
+    if not js_runtimes:
+        return []
+    return ["--js-runtimes", js_runtimes]
+
+
+def _build_yt_dlp_command(
+    yt_dlp_path: str,
+    aria2c_path: str,
+    output_template: str,
+    url: str,
+    proxy_url: str | None,
+    use_aria2: bool,
+) -> list[str]:
+    cmd = [
+        yt_dlp_path,
+        "-o", output_template,
+        "--concurrent-fragments", "4",
+        "-q",
+        *_yt_dlp_js_runtime_args(),
+        *_yt_dlp_cookie_args(),
+    ]
+
+    if use_aria2:
+        aria2_args = "aria2c:-x 16 -k 1M --max-connection-per-server=16 --split=16"
+        if proxy_url:
+            aria2_args = f"{aria2_args} --all-proxy={proxy_url}"
+        cmd.extend([
+            "--external-downloader", aria2c_path,
+            "--external-downloader-args", aria2_args,
+        ])
+
+    if proxy_url:
+        cmd.extend(["--proxy", proxy_url])
+
+    cmd.append(url)
+    return cmd
+
+
 def _fetch_robots_txt(
     session: requests.Session,
     base_url: str,
@@ -383,12 +710,18 @@ def _fetch_robots_txt(
             transport_state=transport_state,
         )
         if response.status_code == 404:
-            logger.info("robots.txt not found at %s; continuing", robots_url)
+            logger.info(
+                "robots.txt not found at %s; continuing",
+                _redact_sensitive_text(robots_url),
+            )
             return None
         response.raise_for_status()
         return response.text
     except Exception as exc:
-        logger.info("Unable to fetch robots.txt (%s); continuing", exc)
+        logger.info(
+            "Unable to fetch robots.txt (%s); continuing",
+            _redact_sensitive_text(exc),
+        )
         return None
 
 
@@ -409,19 +742,19 @@ def _request_with_retries(
         try:
             logger.info(
                 "HTTP GET %s via transport=%s proxied=%s attempt=%d/%d",
-                url,
+                _redact_sensitive_text(url),
                 transport_mode,
                 proxied,
                 attempt,
                 max_attempts,
             )
-            response = session.get(
+            response = _scrape_session_get(
+                session,
                 url,
                 headers=headers,
                 timeout=timeout,
                 allow_redirects=allow_redirects,
                 proxies=request_proxies,
-                **_request_impersonation_kwargs(session, url),
             )
             response.codex_transport_mode = transport_mode
             response.codex_proxied = proxied
@@ -436,7 +769,7 @@ def _request_with_retries(
                     max_attempts,
                     transport_mode,
                     proxied,
-                    exc,
+                    _redact_sensitive_text(exc),
                     sleep_seconds,
                 )
                 time.sleep(sleep_seconds)
@@ -447,7 +780,7 @@ def _request_with_retries(
                     max_attempts,
                     transport_mode,
                     proxied,
-                    exc,
+                    _redact_sensitive_text(exc),
                 )
     raise last_error
 
@@ -467,13 +800,8 @@ def _request_for_scrape(
         transport_state.mode if is_fapplepie_request else SCRAPE_TRANSPORT_CONFIGURED
     )
 
-    response = None
-    initial_proxied = _transport_proxies_for_request(
-        url,
-        initial_transport_mode,
-    )[1]
+    _, initial_proxied = _transport_proxies_for_request(url, initial_transport_mode)
     fallback_allowed = _scrape_direct_fallback_enabled()
-    proxied_request_failed = False
 
     try:
         response = _request_with_retries(
@@ -485,76 +813,60 @@ def _request_for_scrape(
             backoff_seconds=backoff_seconds,
             transport_mode=initial_transport_mode,
         )
-        initial_proxied = getattr(response, "codex_proxied", initial_proxied)
     except SCRAPE_REQUEST_EXCEPTIONS as exc:
-        proxied_request_failed = initial_proxied
         if not (
             is_fapplepie_request
-            and initial_proxied
             and initial_transport_mode == SCRAPE_TRANSPORT_CONFIGURED
+            and initial_proxied
             and fallback_allowed
         ):
-            if is_fapplepie_request and not initial_proxied:
+            if (
+                is_fapplepie_request
+                and initial_transport_mode == SCRAPE_TRANSPORT_CONFIGURED
+                and initial_proxied
+                and not fallback_allowed
+            ):
+                logger.warning(
+                    "Fapplepie request via proxy failed and direct fallback is disabled: %s",
+                    _redact_sensitive_text(url),
+                )
+            elif (
+                is_fapplepie_request
+                and initial_transport_mode == SCRAPE_TRANSPORT_CONFIGURED
+                and not initial_proxied
+            ):
                 logger.error(
                     "Fapplepie upstream request failed via direct network route: %s",
-                    exc,
+                    _redact_sensitive_text(exc),
                 )
             raise
-        logger.warning(
-            "Fapplepie request via proxy failed: %s; retrying direct: %s",
-            exc,
-            url,
-        )
-
-    if response is not None:
+        fallback_reason = "proxied request failure"
+    else:
         response = _annotate_response_transport(
             response,
             initial_transport_mode=initial_transport_mode,
             initial_proxied=initial_proxied,
             fallback_attempted=False,
         )
-
-    should_retry_direct = (
-        (
-            proxied_request_failed
-            or (
-                response is not None
-                and response.status_code == 403
-                and initial_proxied
-            )
-        )
-        and is_fapplepie_request
-        and initial_transport_mode == SCRAPE_TRANSPORT_CONFIGURED
-        and fallback_allowed
-    )
-    if not should_retry_direct:
-        if response is None:
-            if (
-                is_fapplepie_request
-                and initial_transport_mode == SCRAPE_TRANSPORT_CONFIGURED
-                and not fallback_allowed
-            ):
-                logger.warning(
-                    "Fapplepie request via proxy failed and direct fallback is disabled: %s",
-                    url,
-                )
-            return response
-        if (
+        if not (
             is_fapplepie_request
-            and response.status_code == 403
             and initial_transport_mode == SCRAPE_TRANSPORT_CONFIGURED
             and initial_proxied
-            and not fallback_allowed
+            and response.status_code == 403
         ):
+            return response
+        if not fallback_allowed:
             logger.warning(
                 "Fapplepie request returned 403 via proxy and direct fallback is disabled: %s",
-                url,
+                _redact_sensitive_text(url),
             )
-        return response
+            return response
+        fallback_reason = "proxied 403"
 
     logger.warning(
-        "Fapplepie request via proxy failed; retrying direct: %s",
-        url,
+        "Fapplepie %s; retrying direct: %s",
+        fallback_reason,
+        _redact_sensitive_text(url),
     )
     direct_response = _request_with_retries(
         session,
@@ -574,12 +886,16 @@ def _request_for_scrape(
 
     if direct_response.ok:
         transport_state.mode = SCRAPE_TRANSPORT_DIRECT
-        logger.warning("Pinned direct scrape transport after proxied 403: %s", url)
+        logger.warning(
+            "Pinned direct scrape transport after %s: %s",
+            fallback_reason,
+            _redact_sensitive_text(url),
+        )
     else:
         logger.warning(
             "Direct scrape fallback failed with status %s: %s",
             direct_response.status_code,
-            url,
+            _redact_sensitive_text(url),
         )
     return direct_response
 
@@ -614,7 +930,7 @@ def _resolve_working_base_url(
     """
     failures: list[str] = []
     for candidate in _candidate_base_urls(base_url):
-        logger.info("Probing base URL: %s", candidate)
+        logger.info("Probing base URL: %s", _redact_sensitive_text(candidate))
         try:
             response = _request_for_scrape(
                 session,
@@ -633,13 +949,19 @@ def _resolve_working_base_url(
             if candidate != base_url:
                 logger.warning(
                     "Using fallback base URL %s (original %s)",
-                    candidate,
-                    base_url,
+                    _redact_sensitive_text(candidate),
+                    _redact_sensitive_text(base_url),
                 )
             return candidate, response
         except SCRAPE_REQUEST_EXCEPTIONS as exc:
-            failures.append(f"{candidate} -> {exc}")
-            logger.warning("Base URL probe failed: %s", exc)
+            failures.append(
+                f"{_redact_sensitive_text(candidate)} -> "
+                f"{_redact_sensitive_text(exc)}"
+            )
+            logger.warning(
+                "Base URL probe failed: %s",
+                _redact_sensitive_text(exc),
+            )
 
     details = " | ".join(failures)
     raise requests.RequestException(
@@ -666,9 +988,34 @@ def _robots_disallow(
         logger.warning(
             "robots.txt disallows user-agent '%s' for %s",
             user_agent,
-            target_url,
+            _redact_sensitive_text(target_url),
         )
     return not is_allowed
+
+
+def _has_video_headings(response: requests.Response) -> bool:
+    soup = BeautifulSoup(response.content, 'html.parser')
+    return soup.find('h3') is not None
+
+
+def _parse_video_links(
+    response: requests.Response,
+    working_origin: str,
+) -> tuple[list[str], bool]:
+    soup = BeautifulSoup(response.content, 'html.parser')
+    video_urls: list[str] = []
+
+    for h3 in soup.find_all('h3'):
+        link = h3.find('a')
+        if link and link.get('href'):
+            full_url = link['href']
+            if not full_url.startswith('http'):
+                full_url = working_origin + full_url
+            video_urls.append(full_url)
+
+    has_next_page = soup.find('a', string='next ›') is not None
+    return video_urls, has_next_page
+
 
 # Read version from VERSION file
 def get_version():
@@ -764,6 +1111,76 @@ def save_cache_locked(cache) -> None:
     finally:
         _release_lock(lock_file)
 
+
+def probe_scraper(base_url: str) -> ProbeResult:
+    request_timeout = float(os.environ.get("SCRAPE_REQUEST_TIMEOUT_SECONDS", "10"))
+    request_attempts = int(os.environ.get("SCRAPE_REQUEST_ATTEMPTS", "3"))
+    retry_backoff = float(os.environ.get("SCRAPE_REQUEST_BACKOFF_SECONDS", "1"))
+    transport_state = ScrapeTransportState()
+
+    with _build_scrape_session() as session:
+        try:
+            working_base_url, first_page_response = _resolve_working_base_url(
+                session=session,
+                base_url=base_url,
+                timeout=request_timeout,
+                max_attempts=request_attempts,
+                backoff_seconds=retry_backoff,
+                transport_state=transport_state,
+            )
+        except SCRAPE_REQUEST_EXCEPTIONS as exc:
+            raise ProbeError("base_url", str(exc)) from exc
+
+        parsed_working = urlparse(working_base_url)
+        working_origin = f"{parsed_working.scheme}://{parsed_working.netloc}"
+
+        robots_text = _fetch_robots_txt(
+            session,
+            working_base_url,
+            timeout=request_timeout,
+            max_attempts=request_attempts,
+            backoff_seconds=retry_backoff,
+            transport_state=transport_state,
+        )
+        user_agent = session.headers.get("User-Agent", "*")
+        if _robots_disallow(robots_text, working_base_url, user_agent):
+            raise ProbeError("robots", "robots.txt disallows scraping this path")
+
+        try:
+            first_page_response.raise_for_status()
+        except SCRAPE_REQUEST_EXCEPTIONS as exc:
+            raise ProbeError("first_page_fetch", str(exc)) from exc
+
+        video_urls, has_next_page = _parse_video_links(
+            first_page_response,
+            working_origin,
+        )
+        if not video_urls:
+            raise ProbeError("first_page_parse", "no video links found on first page")
+
+        sample_url = video_urls[0]
+        try:
+            sample_final_url = _resolve_download_redirect(
+                session,
+                sample_url,
+                timeout=request_timeout,
+                max_attempts=request_attempts,
+                backoff_seconds=retry_backoff,
+                transport_state=transport_state,
+            )
+        except SCRAPE_REQUEST_EXCEPTIONS as exc:
+            raise ProbeError("sample_redirect", str(exc)) from exc
+
+        return ProbeResult(
+            working_base_url=working_base_url,
+            final_base_url=first_page_response.url,
+            video_count=len(video_urls),
+            has_next_page=has_next_page,
+            sample_url=sample_url,
+            sample_final_url=sample_final_url,
+        )
+
+
 def scrape_videos(base_url, output_file):
     """
     Scrape video URLs from fapplepie.com across all pages
@@ -779,6 +1196,11 @@ def scrape_videos(base_url, output_file):
         request_attempts = int(os.environ.get("SCRAPE_REQUEST_ATTEMPTS", "3"))
         retry_backoff = float(os.environ.get("SCRAPE_REQUEST_BACKOFF_SECONDS", "1"))
         delay_seconds = float(os.environ.get("SCRAPE_DELAY_SECONDS", "1.0"))
+        delay_jitter_seconds = float(os.environ.get("SCRAPE_DELAY_JITTER_SECONDS", "0"))
+        redirect_delay_seconds = float(os.environ.get("SCRAPE_REDIRECT_DELAY_SECONDS", "1.0"))
+        redirect_delay_jitter_seconds = float(
+            os.environ.get("SCRAPE_REDIRECT_DELAY_JITTER_SECONDS", "1.0")
+        )
         transport_state = ScrapeTransportState()
         with _build_scrape_session() as session:
             working_base_url, first_page_response = _resolve_working_base_url(
@@ -840,39 +1262,29 @@ def scrape_videos(base_url, output_file):
                         sys.exit(2)
                     break
 
-                soup = BeautifulSoup(response.content, 'html.parser')
+                page_video_urls, has_next_page = _parse_video_links(
+                    response,
+                    working_origin,
+                )
 
-                # Find all h3 tags (based on the page structure)
-                h3_tags = soup.find_all('h3')
-
-                if not h3_tags:
+                if not page_video_urls and not _has_video_headings(response):
                     print(f"No videos found on page {page}. Stopping pagination.")
                     break
 
-                page_video_count = 0
-
-                for h3 in h3_tags:
-                    # Find the link within the h3 tag
-                    link = h3.find('a')
-                    if link and link.get('href'):
-                        full_url = link['href']
-                        # Handle relative URLs
-                        if not full_url.startswith('http'):
-                            full_url = working_origin + full_url
-
-                        all_video_urls.append(full_url)
-                        page_video_count += 1
+                all_video_urls.extend(page_video_urls)
+                page_video_count = len(page_video_urls)
 
                 print(f"  Found {page_video_count} videos on page {page}")
 
-                # Check if there's a next page link
-                next_page_link = soup.find('a', string='next ›')
-                if not next_page_link:
+                if not has_next_page:
                     print(f"No next page link found. Stopping pagination.")
                     break
 
-                if delay_seconds > 0:
-                    time.sleep(delay_seconds)
+                _sleep_with_jitter(
+                    base_seconds=delay_seconds,
+                    jitter_seconds=delay_jitter_seconds,
+                    reason="next page delay",
+                )
 
                 page += 1
         
@@ -890,6 +1302,7 @@ def scrape_videos(base_url, output_file):
 
             for i, fapplepie_url in enumerate(all_video_urls, 1):
                 cached_final_url = cache['resolved_urls'].get(fapplepie_url)
+                resolved_via_network = False
                 if cached_final_url and not _is_stale_resolved_url(
                     fapplepie_url,
                     cached_final_url,
@@ -901,23 +1314,21 @@ def scrape_videos(base_url, output_file):
                     if cached_final_url:
                         logger.info(
                             "Refreshing stale cached resolved URL: %s -> %s",
-                            fapplepie_url,
-                            cached_final_url,
+                            _redact_sensitive_text(fapplepie_url),
+                            _redact_sensitive_text(cached_final_url),
                         )
                     try:
-                        redirect_response = _request_for_scrape(
+                        final_url = _resolve_download_redirect(
                             session,
                             fapplepie_url,
                             timeout=request_timeout,
-                            allow_redirects=True,
                             max_attempts=request_attempts,
                             backoff_seconds=retry_backoff,
                             transport_state=transport_state,
                         )
-                        redirect_response.raise_for_status()
-                        final_url = redirect_response.url
                         resolved_urls.append(final_url)
                         cache['resolved_urls'][fapplepie_url] = final_url
+                        resolved_via_network = True
                         new_urls += 1
                     except Exception as e:
                         print(f"Warning: Could not fetch {fapplepie_url}: {e}", file=sys.stderr)
@@ -925,6 +1336,12 @@ def scrape_videos(base_url, output_file):
 
                 if i % 50 == 0:
                     print(f"Resolved {i}/{len(all_video_urls)} redirects (cached: {cached_urls}, new: {new_urls})...")
+                if i < len(all_video_urls) and resolved_via_network:
+                    _sleep_with_jitter(
+                        base_seconds=redirect_delay_seconds,
+                        jitter_seconds=redirect_delay_jitter_seconds,
+                        reason="redirect resolution delay",
+                    )
         
         # Write URLs to file
         with open(output_path, 'w') as f:
@@ -949,7 +1366,7 @@ def scrape_videos(base_url, output_file):
         print(f"Error processing page: {e}", file=sys.stderr)
         sys.exit(1)
 
-def download_videos(urls_file='video_urls.txt', output_dir='downloads'):
+def download_videos(urls_file='video_urls.txt', output_dir='downloads') -> int:
     """
     Download videos from URLs using yt-dlp
     Uses cache to avoid re-downloading known videos
@@ -1000,6 +1417,11 @@ def download_videos(urls_file='video_urls.txt', output_dir='downloads'):
                 if target_proxy_url
                 else ""
             )
+            logger.info(
+                "Download proxy decision: host=%s proxied=%s",
+                urlparse(url).hostname,
+                bool(target_proxy_url),
+            )
             use_aria2_for_url = True
 
             # aria2c's --all-proxy only accepts HTTP proxy format, not SOCKS.
@@ -1010,27 +1432,14 @@ def download_videos(urls_file='video_urls.txt', output_dir='downloads'):
                     "(aria2c proxy format is incompatible)."
                 )
             
-            # Use yt-dlp to download the video with optimizations
-            cmd = [
-                yt_dlp_path,
-                '-o', os.path.join(output_path, '%(title)s.%(ext)s'),
-                '--concurrent-fragments', '4',
-                '-q',  # Quiet mode for faster output processing
-            ]
-            if use_aria2_for_url:
-                # Use aria2c for faster parallel downloads when proxy format allows it.
-                aria2_args = (
-                    "aria2c:-x 16 -k 1M --max-connection-per-server=16 --split=16"
-                )
-                if target_proxy_url:
-                    aria2_args = f"{aria2_args} --all-proxy={target_proxy_url}"
-                cmd.extend([
-                    '--external-downloader', aria2c_path,
-                    '--external-downloader-args', aria2_args,
-                ])
-            if target_proxy_url:
-                cmd.extend(['--proxy', target_proxy_url])
-            cmd.append(url)
+            cmd = _build_yt_dlp_command(
+                yt_dlp_path=yt_dlp_path,
+                aria2c_path=aria2c_path,
+                output_template=os.path.join(output_path, "%(title)s.%(ext)s"),
+                url=url,
+                proxy_url=target_proxy_url,
+                use_aria2=use_aria2_for_url,
+            )
             
             result = subprocess.run(cmd, capture_output=True, text=True)
             
@@ -1058,21 +1467,25 @@ def download_videos(urls_file='video_urls.txt', output_dir='downloads'):
     print(f"  Failed: {failed}")
     print(f"Cache saved to: {CACHE_PATH}")
     print(f"{'='*60}")
+    return failed
 
-if __name__ == '__main__':
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point for scraper actions."""
     import argparse
-    
+
     parser = argparse.ArgumentParser(description='Scrape and download videos from fapplepie.com')
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     parser.add_argument('--scrape', action='store_true', default=False, help='Scrape videos from fapplepie.com')
     parser.add_argument('--download', action='store_true', default=False, help='Download videos from URLs')
+    parser.add_argument('--probe', action='store_true', default=False, help='Probe scraper connectivity without writing files')
+    parser.add_argument('--scheduled', action='store_true', default=False, help=argparse.SUPPRESS)
     parser.add_argument('--all', action='store_true', default=False, help='Both scrape and download')
     parser.add_argument('--urls-file', default='video_urls.txt', help='File containing URLs (default: video_urls.txt)')
     parser.add_argument('--output-dir', default='downloads', help='Output directory for downloads (default: downloads)')
     parser.add_argument('--clear-cache', action='store_true', help='Clear the processing cache and start fresh')
-    
-    args = parser.parse_args()
-    
+
+    args = parser.parse_args(argv)
+
     # Handle --clear-cache flag
     if args.clear_cache:
         try:
@@ -1083,7 +1496,7 @@ if __name__ == '__main__':
         finally:
             if 'lock_file' in locals():
                 _release_lock(lock_file)
-        sys.exit(0)
+        return 0
 
     print(f"Fapplepie Downloader v{__version__}")
     try:
@@ -1091,19 +1504,38 @@ if __name__ == '__main__':
         _log_proxy_self_check()
     except ValueError as e:
         print(f"Proxy configuration error: {e}", file=sys.stderr)
-        sys.exit(2)
-    
+        return 2
+
     # If no arguments specified, default to scraping only
-    if not args.scrape and not args.download and not args.all:
+    if not args.scrape and not args.download and not args.probe and not args.all:
         args.scrape = True
-    
+
     # Handle --all flag
     if args.all:
         args.scrape = True
         args.download = True
-    
+
     url = 'https://fapplepie.com/videos'
-    
+
+    if args.scheduled and (args.scrape or args.download):
+        start_delay = float(os.environ.get("SCRAPE_START_DELAY_SECONDS", "0"))
+        start_delay_jitter = float(
+            os.environ.get("SCRAPE_START_DELAY_JITTER_SECONDS", "1800")
+        )
+        _sleep_with_jitter(
+            base_seconds=start_delay,
+            jitter_seconds=start_delay_jitter,
+            reason="scrape start delay",
+        )
+
+    if args.probe:
+        try:
+            result = probe_scraper(url)
+        except ProbeError as e:
+            print(f"Probe failed: {e}", file=sys.stderr)
+            return 4
+        print(result.format_success())
+
     urls_file = args.urls_file
     if _running_in_docker():
         urls_file = str(BASE_DIR / 'video_urls.txt')
@@ -1111,6 +1543,16 @@ if __name__ == '__main__':
     if args.scrape:
         scrape_videos(url, urls_file)
         print()
-    
+
     if args.download:
-        download_videos(urls_file, args.output_dir)
+        failed_downloads = download_videos(urls_file, args.output_dir)
+        if failed_downloads:
+            noun = "download" if failed_downloads == 1 else "downloads"
+            print(f"{failed_downloads} {noun} failed.", file=sys.stderr)
+            return 1
+
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
