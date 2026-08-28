@@ -1,0 +1,15 @@
+.git/
+.env
+*.cookies.txt
+.pip-tools-cache/
+
+app/cache/
+app/downloads/
+app/logs/
+app/secrets/
+app/video_urls.txt
+
+__pycache__/
+.pytest_cache/
+.venv/
+venv/

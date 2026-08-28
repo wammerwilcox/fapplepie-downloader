@@ -11,6 +11,12 @@
   "platformAutomerge": true,
   "rebaseWhen": "behind-base-branch",
   "semanticCommits": "enabled",
+  "bumpVersions": [
+    {
+      "filePatterns": ["VERSION"],
+      "bumpType": "patch"
+    }
+  ],
   "vulnerabilityAlerts": {
     "enabled": true
   },

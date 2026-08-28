@@ -813,7 +813,7 @@ def _request_for_scrape(
             backoff_seconds=backoff_seconds,
             transport_mode=initial_transport_mode,
         )
-    except SCRAPE_REQUEST_EXCEPTIONS:
+    except SCRAPE_REQUEST_EXCEPTIONS as exc:
         if not (
             is_fapplepie_request
             and initial_transport_mode == SCRAPE_TRANSPORT_CONFIGURED
@@ -829,6 +829,15 @@ def _request_for_scrape(
                 logger.warning(
                     "Fapplepie request via proxy failed and direct fallback is disabled: %s",
                     _redact_sensitive_text(url),
+                )
+            elif (
+                is_fapplepie_request
+                and initial_transport_mode == SCRAPE_TRANSPORT_CONFIGURED
+                and not initial_proxied
+            ):
+                logger.error(
+                    "Fapplepie upstream request failed via direct network route: %s",
+                    _redact_sensitive_text(exc),
                 )
             raise
         fallback_reason = "proxied request failure"
