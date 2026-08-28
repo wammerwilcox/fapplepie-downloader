@@ -64,10 +64,10 @@ Runs the scraper on a schedule inside the container:
 docker-compose up -d
 ```
 
-The default compose file on this branch uses the versioned release-candidate image from GitHub Container Registry:
+The default compose file on this branch uses the versioned release image from GitHub Container Registry:
 
 ```yaml
-image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-rc.1
+image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0
 ```
 
 ### One-Time Execution Mode
@@ -381,7 +381,7 @@ To update the script:
 git pull
 ```
 
-2. **Pull the pinned release-candidate image and restart**:
+2. **Pull the pinned release image and restart**:
 
 ```bash
 docker-compose pull
@@ -390,12 +390,12 @@ docker-compose up -d
 
 ## Production Considerations
 
-### Use versioned release-candidate images
+### Use versioned release images
 
-The checked-in `docker-compose.yml` uses a versioned GHCR release-candidate image:
+The checked-in `docker-compose.yml` uses a versioned GHCR release image:
 
 ```yaml
-image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-rc.1
+image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0
 ```
 
 For multi-architecture deployments that should select the platform automatically, use the tag without an architecture-specific digest.
@@ -436,7 +436,7 @@ To run multiple instances with different schedules:
 ```yaml
 services:
   downloader-morning:
-    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-rc.1
+    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0
     environment:
       CRON_SCHEDULE: "0 6 * * *"
     volumes:
@@ -444,7 +444,7 @@ services:
       - ./logs-morning:/app/logs
 
   downloader-evening:
-    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-rc.1
+    image: ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0
     environment:
       CRON_SCHEDULE: "0 18 * * *"
     volumes:
@@ -454,8 +454,8 @@ services:
 
 ## Published Image
 
-Release-candidate images are published to GitHub Container Registry:
+Release images are published to GitHub Container Registry:
 
 ```bash
-docker pull ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0-rc.1
+docker pull ghcr.io/wammerwilcox/fapplepie-downloader:2.0.0
 ```
