@@ -14,6 +14,7 @@
   "bumpVersions": [
     {
       "filePatterns": ["VERSION"],
+      "matchStrings": ["^(?<version>\\d+\\.\\d+\\.\\d+)$"],
       "bumpType": "patch"
     }
   ],
