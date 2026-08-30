@@ -5,6 +5,7 @@ import unittest
 
 WORKFLOW = Path(".github/workflows/bump-version.yml")
 RENOVATE_CONFIG = Path("renovate.json")
+REQUIREMENTS_LOCK = Path("app/requirements.txt")
 
 
 class RenovateVersionBumpTests(unittest.TestCase):
@@ -16,6 +17,7 @@ class RenovateVersionBumpTests(unittest.TestCase):
             [
                 {
                     "filePatterns": ["VERSION"],
+                    "matchStrings": ["^(?<version>\\d+\\.\\d+\\.\\d+)$"],
                     "bumpType": "patch",
                 }
             ],
@@ -26,3 +28,9 @@ class RenovateVersionBumpTests(unittest.TestCase):
             WORKFLOW.exists(),
             "Renovate should bump VERSION before merge; a post-merge main push workflow conflicts with repository rules.",
         )
+
+    def test_requirements_lock_has_renovate_supported_header(self) -> None:
+        lockfile = REQUIREMENTS_LOCK.read_text()
+
+        self.assertIn("pip-compile", lockfile)
+        self.assertNotIn("--no-index", lockfile)
